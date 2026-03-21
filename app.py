@@ -25,15 +25,11 @@ h1, h2, h3 {
     color: white;
 }
 
-p {
-    color: #cbd5e1;
-}
-
 .stMetric {
-    background: #111827;
+    background: linear-gradient(145deg, #111827, #1f2937);
     padding: 18px;
-    border-radius: 12px;
-    border: 1px solid #1f2937;
+    border-radius: 14px;
+    box-shadow: 0px 4px 20px rgba(0,0,0,0.4);
 }
 
 .stDownloadButton>button {
@@ -51,22 +47,21 @@ p {
 </style>
 """, unsafe_allow_html=True)
 
-# ===== HEADER PROFISSIONAL =====
+# ===== HEADER =====
 col1, col2 = st.columns([2, 4])
 
 with col1:
-    st.image("logo.png", width=260)  # tamanho comercial
+    st.image("logo.png", width=240)
 
 with col2:
     st.markdown("# TARGET TELECOM")
-    st.markdown("### Plataforma Inteligente de Gestão de Faturas")
+    st.markdown("### Inteligência em Faturas Corporativas")
 
 st.markdown("---")
 
-st.markdown("### 📎 Envie suas faturas")
-uploaded_files = st.file_uploader("", type="pdf", accept_multiple_files=True)
+uploaded_files = st.file_uploader("Envie PDFs", type="pdf", accept_multiple_files=True)
 
-# ===== BASE ORIGINAL =====
+# ===== FUNÇÕES BASE =====
 
 def extrair_cliente(texto):
     linhas = texto.split("\n")
@@ -152,6 +147,10 @@ def extrair_detalhamento(texto):
 
         if m:
             internet = m.group(1)
+        else:
+            m = re.search(r"Subtotal\s([\d\.,]+)", bloco)
+            if m:
+                internet = m.group(1)
 
         minutos = "0"
         m = re.search(r"TOTAL\s([\dminseg:s]+)", bloco)
@@ -205,8 +204,10 @@ def processar_pdf(file):
     dados = []
 
     for linha in linhas:
+
         total = to_float(mensalidades.get(linha, "0"))
         valor_passaporte = to_float(pacotes.get(linha, {}).get("Valor Passaporte", "0"))
+
         valor_plano = total - valor_passaporte
 
         dados.append({
@@ -248,11 +249,32 @@ def processar_pdf(file):
 
     df["Em Uso"] = df.apply(em_uso, axis=1)
 
+    def estrategia(row):
+        if row["Em Uso"] == "Não":
+            return "⚪ Manter"
+
+        pacote_gb = extrair_gb_pacote(row["Pacote de dados"])
+        uso_gb = row["Internet (MB)"] / 1024 if row["Internet (MB)"] else 0
+
+        if pacote_gb > 0 and uso_gb >= pacote_gb * 0.9:
+            return "🔵 Upsell → Aumento recomendado"
+
+        if "Baixo" in row["Perfil"]:
+            return "🟡 Sustentar plano"
+        if "Médio" in row["Perfil"]:
+            return "🟢 Bem dimensionado"
+        if "Alto" in row["Perfil"]:
+            return "🟢 Bem dimensionado"
+
+        return ""
+
+    df["Estratégia Comercial"] = df.apply(estrategia, axis=1)
+
     return df, cliente
 
-# ===== EXCEL BASE (INALTERADO) =====
-
+# ===== GERAR EXCEL BASE (RESTAURADO) =====
 def gerar_excel(df):
+
     wb = Workbook()
     ws = wb.active
     ws.title = "Detalhamento"
@@ -261,6 +283,86 @@ def gerar_excel(df):
 
     for r in dataframe_to_rows(df_reset, index=False, header=True):
         ws.append(r)
+
+    borda = Border(
+        left=Side(style='thin'),
+        right=Side(style='thin'),
+        top=Side(style='thin'),
+        bottom=Side(style='thin')
+    )
+
+    header_fill = PatternFill(start_color="333333", fill_type="solid")
+    zebra = PatternFill(start_color="F2F2F2", fill_type="solid")
+
+    vermelho = PatternFill(start_color="FF4C4C", fill_type="solid")
+    verde = PatternFill(start_color="C6EFCE", fill_type="solid")
+    amarelo = PatternFill(start_color="FFF3B0", fill_type="solid")
+    azul = PatternFill(start_color="BDD7EE", fill_type="solid")
+    cinza = PatternFill(start_color="D9D9D9", fill_type="solid")
+
+    headers = [cell.value for cell in ws[1]]
+
+    for cell in ws[1]:
+        cell.font = Font(bold=True, color="FFFFFF")
+        cell.fill = header_fill
+        cell.alignment = Alignment(horizontal="center", vertical="center")
+        cell.border = borda
+
+    for i, row in enumerate(ws.iter_rows(min_row=2), start=2):
+
+        for j, cell in enumerate(row):
+            coluna = headers[j]
+
+            if coluna == "Perfil":
+                cell.alignment = Alignment(horizontal="left", vertical="center")
+            elif coluna == "Minutos":
+                cell.alignment = Alignment(horizontal="center", vertical="center")
+            elif coluna == "Estratégia Comercial":
+                cell.alignment = Alignment(horizontal="left", vertical="center")
+            else:
+                cell.alignment = Alignment(horizontal="center", vertical="center")
+
+            cell.border = borda
+
+        if i % 2 == 0:
+            for cell in row:
+                cell.fill = zebra
+
+        perfil = str(row[8].value)
+        uso = str(row[9].value)
+        estrategia = str(row[10].value)
+
+        if "Alto" in perfil:
+            row[8].fill = vermelho
+        elif "Médio" in perfil:
+            row[8].fill = amarelo
+
+        if uso == "Não":
+            row[9].fill = vermelho
+        else:
+            row[9].fill = verde
+
+        if "Manter" in estrategia:
+            row[10].fill = cinza
+        elif "Sustentar" in estrategia:
+            row[10].fill = amarelo
+        elif "Bem dimensionado" in estrategia:
+            row[10].fill = verde
+        elif "Upsell" in estrategia:
+            row[10].fill = azul
+
+    for col in ws.columns:
+        max_length = 0
+        col_letter = col[0].column_letter
+
+        for cell in col:
+            if cell.value:
+                max_length = max(max_length, len(str(cell.value)))
+
+        ws.column_dimensions[col_letter].width = max_length + 3
+
+    ws.freeze_panes = "A2"
+    ws.auto_filter.ref = ws.dimensions
 
     buffer = io.BytesIO()
     wb.save(buffer)
@@ -272,23 +374,19 @@ def gerar_excel(df):
 
 if uploaded_files:
 
-    progress = st.progress(0)
-    status = st.empty()
-
     df_total = pd.DataFrame()
     cliente_nome = "CLIENTE"
 
+    progress = st.progress(0)
     total_files = len(uploaded_files)
 
     for i, file in enumerate(uploaded_files):
-        status.write(f"📄 Processando {file.name}...")
-        df, cliente = processar_pdf(file)
-        df_total = pd.concat([df_total, df])
-        cliente_nome = cliente
+        with st.spinner(f"Processando {file.name}..."):
+            df, cliente = processar_pdf(file)
+            df_total = pd.concat([df_total, df])
+            cliente_nome = cliente
 
         progress.progress((i + 1) / total_files)
-
-    status.success("✅ Processamento concluído")
 
     if not df_total.empty:
 
@@ -305,12 +403,9 @@ if uploaded_files:
         col4.metric("Média GB", round(media_gb, 1))
 
         st.markdown("---")
-
         st.dataframe(df_total)
 
-        with st.spinner("Gerando Excel..."):
-            excel = gerar_excel(df_total)
-            time.sleep(0.5)
+        excel = gerar_excel(df_total)
 
         st.download_button(
             "📥 Baixar Relatório Excel",
