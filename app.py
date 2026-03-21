@@ -9,23 +9,19 @@ from openpyxl.styles import Alignment, PatternFill, Font, Border, Side
 
 st.set_page_config(layout="wide")
 
-# ===== ESTILO GLOBAL =====
+# ===== ESTILO =====
 st.markdown("""
 <style>
 .main {
     background-color: #0f172a;
 }
 
-h1, h2, h3, h4 {
+h1, h2, h3 {
     color: white;
 }
 
 p {
     color: #cbd5e1;
-}
-
-.block-container {
-    padding-top: 2rem;
 }
 
 .stButton>button {
@@ -54,20 +50,14 @@ with col1:
 
 with col2:
     st.markdown("# TARGET TELECOM")
-    st.markdown("### Inteligência em Análise de Faturas Corporativas")
+    st.markdown("### Inteligência em Faturas Corporativas")
 
 st.markdown("---")
-
-st.markdown("""
-### 📊 Transforme faturas em estratégia
-
-Identifique oportunidades de crescimento, ajuste de planos e otimização com inteligência comercial.
-""")
 
 st.markdown("### 📎 Envie suas faturas")
 uploaded_files = st.file_uploader("", type="pdf", accept_multiple_files=True)
 
-# ===== FUNÇÕES BASE (INALTERADAS) =====
+# ===== FUNÇÕES BASE =====
 
 def extrair_cliente(texto):
     linhas = texto.split("\n")
@@ -278,6 +268,22 @@ def processar_pdf(file):
 
     return df, cliente
 
+# ===== FUNÇÃO EXCEL (CORRIGIDA) =====
+
+def gerar_excel(df):
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Detalhamento"
+
+    for r in dataframe_to_rows(df, index=False, header=True):
+        ws.append(r)
+
+    buffer = io.BytesIO()
+    wb.save(buffer)
+    buffer.seek(0)
+
+    return buffer
+
 # ===== EXECUÇÃO =====
 
 if uploaded_files:
@@ -293,9 +299,7 @@ if uploaded_files:
 
     if not df_total.empty:
 
-        # ===== DASHBOARD =====
-        st.markdown("## 📊 Visão Executiva")
-
+        # DASHBOARD
         col1, col2, col3, col4 = st.columns(4)
 
         total_linhas = len(df_total)
