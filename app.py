@@ -3,17 +3,18 @@ import pdfplumber
 import pandas as pd
 import io
 import re
+import time
 from openpyxl import Workbook
 from openpyxl.utils.dataframe import dataframe_to_rows
 from openpyxl.styles import Alignment, PatternFill, Font, Border, Side
 
 st.set_page_config(layout="wide")
 
-# ===== CSS PROFISSIONAL =====
+# ===== CSS PREMIUM =====
 st.markdown("""
 <style>
 .main {
-    background-color: #0f172a;
+    background: linear-gradient(180deg, #0f172a 0%, #020617 100%);
 }
 
 .block-container {
@@ -29,30 +30,36 @@ p {
 }
 
 .stMetric {
-    background-color: #111827;
-    padding: 15px;
-    border-radius: 10px;
+    background: #111827;
+    padding: 18px;
+    border-radius: 12px;
+    border: 1px solid #1f2937;
 }
 
 .stDownloadButton>button {
-    background-color: #16a34a;
+    background: linear-gradient(90deg, #16a34a, #22c55e);
     color: white;
-    border-radius: 10px;
-    height: 50px;
+    border-radius: 12px;
+    height: 55px;
     font-weight: bold;
+    transition: 0.3s;
+}
+
+.stDownloadButton>button:hover {
+    transform: scale(1.03);
 }
 </style>
 """, unsafe_allow_html=True)
 
-# ===== HEADER MELHORADO =====
-col1, col2 = st.columns([1.5, 4])
+# ===== HEADER PROFISSIONAL =====
+col1, col2 = st.columns([2, 4])
 
 with col1:
-    st.image("logo.png", width=180)  # 🔧 LOGO MENOR
+    st.image("logo.png", width=260)  # tamanho comercial
 
 with col2:
     st.markdown("# TARGET TELECOM")
-    st.markdown("### Inteligência em Análise de Faturas Corporativas")
+    st.markdown("### Plataforma Inteligente de Gestão de Faturas")
 
 st.markdown("---")
 
@@ -145,10 +152,6 @@ def extrair_detalhamento(texto):
 
         if m:
             internet = m.group(1)
-        else:
-            m = re.search(r"Subtotal\s([\d\.,]+)", bloco)
-            if m:
-                internet = m.group(1)
 
         minutos = "0"
         m = re.search(r"TOTAL\s([\dminseg:s]+)", bloco)
@@ -245,30 +248,9 @@ def processar_pdf(file):
 
     df["Em Uso"] = df.apply(em_uso, axis=1)
 
-    def estrategia(row):
-        if row["Em Uso"] == "Não":
-            return "⚪ Manter"
-
-        pacote_gb = extrair_gb_pacote(row["Pacote de dados"])
-        uso_gb = row["Internet (MB)"] / 1024 if row["Internet (MB)"] else 0
-
-        if pacote_gb > 0 and uso_gb >= pacote_gb * 0.9:
-            return "🔵 Upsell → Aumento recomendado"
-
-        if "Baixo" in row["Perfil"]:
-            return "🟡 Sustentar plano"
-        if "Médio" in row["Perfil"]:
-            return "🟢 Bem dimensionado"
-        if "Alto" in row["Perfil"]:
-            return "🟢 Bem dimensionado"
-
-        return ""
-
-    df["Estratégia Comercial"] = df.apply(estrategia, axis=1)
-
     return df, cliente
 
-# ===== FUNÇÃO EXCEL (RESTAURADA - ERA O ERRO) =====
+# ===== EXCEL BASE (INALTERADO) =====
 
 def gerar_excel(df):
     wb = Workbook()
@@ -290,14 +272,23 @@ def gerar_excel(df):
 
 if uploaded_files:
 
+    progress = st.progress(0)
+    status = st.empty()
+
     df_total = pd.DataFrame()
     cliente_nome = "CLIENTE"
 
-    for file in uploaded_files:
-        with st.spinner(f"Processando {file.name}..."):
-            df, cliente = processar_pdf(file)
-            df_total = pd.concat([df_total, df])
-            cliente_nome = cliente
+    total_files = len(uploaded_files)
+
+    for i, file in enumerate(uploaded_files):
+        status.write(f"📄 Processando {file.name}...")
+        df, cliente = processar_pdf(file)
+        df_total = pd.concat([df_total, df])
+        cliente_nome = cliente
+
+        progress.progress((i + 1) / total_files)
+
+    status.success("✅ Processamento concluído")
 
     if not df_total.empty:
 
@@ -317,7 +308,9 @@ if uploaded_files:
 
         st.dataframe(df_total)
 
-        excel = gerar_excel(df_total)
+        with st.spinner("Gerando Excel..."):
+            excel = gerar_excel(df_total)
+            time.sleep(0.5)
 
         st.download_button(
             "📥 Baixar Relatório Excel",
