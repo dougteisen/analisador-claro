@@ -9,31 +9,14 @@ from openpyxl.styles import Alignment, PatternFill, Font, Border, Side
 
 st.set_page_config(layout="wide")
 
-# ===== CSS PROFISSIONAL =====
+# ===== CSS =====
 st.markdown("""
 <style>
-.main {
-    background-color: #0f172a;
-}
-
-.block-container {
-    padding-top: 1.5rem;
-}
-
-h1, h2, h3 {
-    color: white;
-}
-
-p {
-    color: #cbd5e1;
-}
-
-.stMetric {
-    background-color: #111827;
-    padding: 15px;
-    border-radius: 10px;
-}
-
+.main { background-color: #0f172a; }
+.block-container { padding-top: 1.5rem; }
+h1, h2, h3 { color: white; }
+p { color: #cbd5e1; }
+.stMetric { background-color: #111827; padding: 15px; border-radius: 10px; }
 .stDownloadButton>button {
     background-color: #16a34a;
     color: white;
@@ -44,22 +27,21 @@ p {
 </style>
 """, unsafe_allow_html=True)
 
-# ===== HEADER MELHORADO =====
-col1, col2 = st.columns([1.5, 4])
+# ===== HEADER =====
+col1, col2 = st.columns([1, 4])
 
 with col1:
-    st.image("logo.png", use_container_width=True)
+    st.image("logo.png", width=180)  # ~30% menor
 
 with col2:
     st.markdown("# TARGET TELECOM")
-    st.markdown("### Inteligência em Análise de Faturas Corporativas")
+    st.markdown("### Inteligência em Faturas Corporativas")
 
 st.markdown("---")
 
-st.markdown("### 📎 Envie suas faturas")
-uploaded_files = st.file_uploader("", type="pdf", accept_multiple_files=True)
+uploaded_files = st.file_uploader("Envie PDFs", type="pdf", accept_multiple_files=True)
 
-# ===== BASE ORIGINAL (INALTERADA) =====
+# ===== FUNÇÕES BASE =====
 
 def extrair_cliente(texto):
     linhas = texto.split("\n")
@@ -145,10 +127,6 @@ def extrair_detalhamento(texto):
 
         if m:
             internet = m.group(1)
-        else:
-            m = re.search(r"Subtotal\s([\d\.,]+)", bloco)
-            if m:
-                internet = m.group(1)
 
         minutos = "0"
         m = re.search(r"TOTAL\s([\dminseg:s]+)", bloco)
@@ -184,6 +162,8 @@ def extrair_gb_pacote(pacote):
         return int(m.group(1))
     return 0
 
+# ===== PROCESSAMENTO =====
+
 def processar_pdf(file):
     texto = ""
 
@@ -202,10 +182,8 @@ def processar_pdf(file):
     dados = []
 
     for linha in linhas:
-
         total = to_float(mensalidades.get(linha, "0"))
         valor_passaporte = to_float(pacotes.get(linha, {}).get("Valor Passaporte", "0"))
-
         valor_plano = total - valor_passaporte
 
         dados.append({
@@ -252,7 +230,7 @@ def processar_pdf(file):
             return "⚪ Manter"
 
         pacote_gb = extrair_gb_pacote(row["Pacote de dados"])
-        uso_gb = row["Internet (MB)"] / 1024 if row["Internet (MB)"] else 0
+        uso_gb = row["Internet (MB)"] / 1024
 
         if pacote_gb > 0 and uso_gb >= pacote_gb * 0.9:
             return "🔵 Upsell → Aumento recomendado"
@@ -270,43 +248,122 @@ def processar_pdf(file):
 
     return df, cliente
 
+# ===== EXCEL BASE (INALTERADO) =====
+
+def gerar_excel(df):
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Detalhamento"
+
+    df_reset = df.reset_index(drop=True)
+
+    for r in dataframe_to_rows(df_reset, index=False, header=True):
+        ws.append(r)
+
+    borda = Border(
+        left=Side(style='thin'),
+        right=Side(style='thin'),
+        top=Side(style='thin'),
+        bottom=Side(style='thin')
+    )
+
+    header_fill = PatternFill(start_color="333333", fill_type="solid")
+    zebra = PatternFill(start_color="F2F2F2", fill_type="solid")
+
+    vermelho = PatternFill(start_color="FF4C4C", fill_type="solid")
+    verde = PatternFill(start_color="C6EFCE", fill_type="solid")
+    amarelo = PatternFill(start_color="FFF3B0", fill_type="solid")
+    azul = PatternFill(start_color="BDD7EE", fill_type="solid")
+    cinza = PatternFill(start_color="D9D9D9", fill_type="solid")
+
+    headers = [cell.value for cell in ws[1]]
+
+    for cell in ws[1]:
+        cell.font = Font(bold=True, color="FFFFFF")
+        cell.fill = header_fill
+        cell.alignment = Alignment(horizontal="center", vertical="center")
+        cell.border = borda
+
+    for i, row in enumerate(ws.iter_rows(min_row=2), start=2):
+
+        for j, cell in enumerate(row):
+            coluna = headers[j]
+
+            if coluna == "Perfil":
+                cell.alignment = Alignment(horizontal="left", vertical="center")
+            elif coluna == "Minutos":
+                cell.alignment = Alignment(horizontal="center", vertical="center")
+            elif coluna == "Estratégia Comercial":
+                cell.alignment = Alignment(horizontal="left", vertical="center")
+            else:
+                cell.alignment = Alignment(horizontal="center", vertical="center")
+
+            cell.border = borda
+
+        if i % 2 == 0:
+            for cell in row:
+                cell.fill = zebra
+
+        perfil = str(row[8].value)
+        uso = str(row[9].value)
+        estrategia = str(row[10].value)
+
+        if "Alto" in perfil:
+            row[8].fill = vermelho
+        elif "Médio" in perfil:
+            row[8].fill = amarelo
+
+        if uso == "Não":
+            row[9].fill = vermelho
+        else:
+            row[9].fill = verde
+
+        if "Manter" in estrategia:
+            row[10].fill = cinza
+        elif "Sustentar" in estrategia:
+            row[10].fill = amarelo
+        elif "Bem dimensionado" in estrategia:
+            row[10].fill = verde
+        elif "Upsell" in estrategia:
+            row[10].fill = azul
+
+    for col in ws.columns:
+        max_length = 0
+        col_letter = col[0].column_letter
+
+        for cell in col:
+            if cell.value:
+                max_length = max(max_length, len(str(cell.value)))
+
+        ws.column_dimensions[col_letter].width = max_length + 3
+
+    ws.freeze_panes = "A2"
+    ws.auto_filter.ref = ws.dimensions
+
+    buffer = io.BytesIO()
+    wb.save(buffer)
+    buffer.seek(0)
+
+    return buffer
+
 # ===== EXECUÇÃO =====
 
 if uploaded_files:
-
     df_total = pd.DataFrame()
     cliente_nome = "CLIENTE"
 
     for file in uploaded_files:
-        with st.spinner(f"Processando {file.name}..."):
-            df, cliente = processar_pdf(file)
-            df_total = pd.concat([df_total, df])
-            cliente_nome = cliente
+        df, cliente = processar_pdf(file)
+        df_total = pd.concat([df_total, df])
+        cliente_nome = cliente
 
     if not df_total.empty:
-
-        # DASHBOARD (visual apenas)
-        col1, col2, col3, col4 = st.columns(4)
-
-        total_linhas = len(df_total)
-        em_uso = (df_total["Em Uso"] == "Sim").sum()
-        total_gb = df_total["Internet (MB)"].sum() / 1024
-        media_gb = total_gb / total_linhas if total_linhas else 0
-
-        col1.metric("Linhas", total_linhas)
-        col2.metric("Em uso", em_uso)
-        col3.metric("Total GB", round(total_gb, 1))
-        col4.metric("Média GB", round(media_gb, 1))
-
-        st.markdown("---")
-
         st.dataframe(df_total)
 
-        # ⚠️ USA SUA FUNÇÃO ORIGINAL (NÃO ALTERADA)
         excel = gerar_excel(df_total)
 
         st.download_button(
-            "📥 Baixar Relatório Excel",
+            "📥 Baixar Excel",
             data=excel,
             file_name=f"Analise_Target_{cliente_nome}.xlsx"
         )
