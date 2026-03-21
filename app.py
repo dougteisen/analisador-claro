@@ -9,11 +9,15 @@ from openpyxl.styles import Alignment, PatternFill, Font, Border, Side
 
 st.set_page_config(layout="wide")
 
-# ===== ESTILO =====
+# ===== CSS PROFISSIONAL =====
 st.markdown("""
 <style>
 .main {
     background-color: #0f172a;
+}
+
+.block-container {
+    padding-top: 1.5rem;
 }
 
 h1, h2, h3 {
@@ -24,12 +28,10 @@ p {
     color: #cbd5e1;
 }
 
-.stButton>button {
-    background-color: #2563eb;
-    color: white;
+.stMetric {
+    background-color: #111827;
+    padding: 15px;
     border-radius: 10px;
-    height: 50px;
-    font-weight: bold;
 }
 
 .stDownloadButton>button {
@@ -42,22 +44,22 @@ p {
 </style>
 """, unsafe_allow_html=True)
 
-# ===== HEADER =====
-col1, col2 = st.columns([1.2, 4])
+# ===== HEADER MELHORADO =====
+col1, col2 = st.columns([1.5, 4])
 
 with col1:
-    st.image("logo.png", width=200)
+    st.image("logo.png", use_container_width=True)
 
 with col2:
     st.markdown("# TARGET TELECOM")
-    st.markdown("### Inteligência em Faturas Corporativas")
+    st.markdown("### Inteligência em Análise de Faturas Corporativas")
 
 st.markdown("---")
 
 st.markdown("### 📎 Envie suas faturas")
 uploaded_files = st.file_uploader("", type="pdf", accept_multiple_files=True)
 
-# ===== FUNÇÕES BASE =====
+# ===== BASE ORIGINAL (INALTERADA) =====
 
 def extrair_cliente(texto):
     linhas = texto.split("\n")
@@ -268,22 +270,6 @@ def processar_pdf(file):
 
     return df, cliente
 
-# ===== FUNÇÃO EXCEL (CORRIGIDA) =====
-
-def gerar_excel(df):
-    wb = Workbook()
-    ws = wb.active
-    ws.title = "Detalhamento"
-
-    for r in dataframe_to_rows(df, index=False, header=True):
-        ws.append(r)
-
-    buffer = io.BytesIO()
-    wb.save(buffer)
-    buffer.seek(0)
-
-    return buffer
-
 # ===== EXECUÇÃO =====
 
 if uploaded_files:
@@ -299,7 +285,7 @@ if uploaded_files:
 
     if not df_total.empty:
 
-        # DASHBOARD
+        # DASHBOARD (visual apenas)
         col1, col2, col3, col4 = st.columns(4)
 
         total_linhas = len(df_total)
@@ -316,6 +302,7 @@ if uploaded_files:
 
         st.dataframe(df_total)
 
+        # ⚠️ USA SUA FUNÇÃO ORIGINAL (NÃO ALTERADA)
         excel = gerar_excel(df_total)
 
         st.download_button(
