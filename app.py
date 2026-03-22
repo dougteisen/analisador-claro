@@ -17,7 +17,6 @@ st.markdown("""
     background: linear-gradient(180deg, #0f172a 0%, #020617 100%);
 }
 
-/* HEADER */
 h1, h2, h3 {
     color: white;
 }
@@ -26,7 +25,6 @@ h1, h2, h3 {
     padding-top: 1.5rem;
 }
 
-/* DROPZONE */
 .upload-box {
     border: 2px dashed #334155;
     border-radius: 16px;
@@ -38,11 +36,9 @@ h1, h2, h3 {
 
 .upload-box:hover {
     border-color: #22c55e;
-    background: #020617;
     transform: scale(1.01);
 }
 
-/* ÍCONE ANIMADO */
 .upload-icon {
     font-size: 50px;
     animation: pulse 2s infinite;
@@ -54,7 +50,6 @@ h1, h2, h3 {
     100% {opacity: 0.5;}
 }
 
-/* METRICS */
 .stMetric {
     background: linear-gradient(145deg, #111827, #1f2937);
     padding: 18px;
@@ -62,7 +57,6 @@ h1, h2, h3 {
     box-shadow: 0px 4px 20px rgba(0,0,0,0.4);
 }
 
-/* BOTÃO */
 .stDownloadButton>button {
     background: linear-gradient(90deg, #16a34a, #22c55e);
     color: white;
@@ -91,7 +85,7 @@ with col2:
 
 st.markdown("---")
 
-# ===== UPLOAD PREMIUM =====
+# ===== UPLOAD =====
 st.markdown("""
 <div class="upload-box">
     <div class="upload-icon">📎</div>
@@ -154,19 +148,28 @@ def extrair_pacote_e_passaporte(texto):
         if m:
             pacote = m.group(1)
 
-        # ===== NOVA LÓGICA FLEXÍVEL =====
-        for linha_bloco in bloco.split("\n"):
-            linha_limpa = linha_bloco.strip()
+        # ===== NOVA LÓGICA SEGURA =====
+        secao = re.search(
+            r"Mensalidades e Pacotes Promocionais(.*?)TOTAL\s+R\$",
+            bloco,
+            re.DOTALL
+        )
 
-            if "Claro Passaporte" not in linha_limpa:
-                continue
+        if secao:
+            trecho = secao.group(1)
 
-            m = re.search(r"(Claro Passaporte.*?GB).*?([\d]+,\d{2})$", linha_limpa)
+            for linha_bloco in trecho.split("\n"):
+                linha_limpa = linha_bloco.strip()
 
-            if m:
-                passaporte = m.group(1).strip()
-                valor_passaporte = m.group(2).strip()
-                break
+                if "Claro Passaporte" not in linha_limpa:
+                    continue
+
+                m = re.search(r"(Claro Passaporte.*?GB).*?([\d]+,\d{2})$", linha_limpa)
+
+                if m:
+                    passaporte = m.group(1).strip()
+                    valor_passaporte = m.group(2).strip()
+                    break
 
         resultado[linha] = {
             "Pacote": pacote,
@@ -238,18 +241,15 @@ def processar_pdf(file):
     texto = ""
 
     with pdfplumber.open(file) as pdf:
-
         total_paginas = len(pdf.pages)
         progresso = st.progress(0)
         status = st.empty()
 
         for i, page in enumerate(pdf.pages):
             status.text(f"📄 Processando página {i+1} de {total_paginas}")
-
             t = page.extract_text()
             if t:
                 texto += t + "\n"
-
             progresso.progress((i + 1) / total_paginas)
 
         status.text("🔍 Extraindo dados...")
@@ -264,10 +264,8 @@ def processar_pdf(file):
     dados = []
 
     for linha in linhas:
-
         total = to_float(mensalidades.get(linha, "0"))
         valor_passaporte = to_float(pacotes.get(linha, {}).get("Valor Passaporte", "0"))
-
         valor_plano = total - valor_passaporte
 
         dados.append({
