@@ -3,26 +3,83 @@ import pdfplumber
 import pandas as pd
 import io
 import re
-import time
 from openpyxl import Workbook
 from openpyxl.utils.dataframe import dataframe_to_rows
 from openpyxl.styles import Alignment, PatternFill, Font, Border, Side
 
 st.set_page_config(layout="wide")
 
-# ===== CSS LEVE (SEM QUEBRAR VISUAL EXISTENTE) =====
+# ===== CSS SaaS PROFISSIONAL =====
 st.markdown("""
 <style>
+
 .main {
     background: linear-gradient(180deg, #0f172a 0%, #020617 100%);
 }
-.stProgress > div > div {
-    background-color: #22c55e;
+
+/* HEADER */
+h1, h2, h3 {
+    color: white;
 }
+
+.block-container {
+    padding-top: 1.5rem;
+}
+
+/* DROPZONE */
+.upload-box {
+    border: 2px dashed #334155;
+    border-radius: 16px;
+    padding: 40px;
+    text-align: center;
+    background: #020617;
+    transition: 0.3s;
+}
+
+.upload-box:hover {
+    border-color: #22c55e;
+    background: #020617;
+    transform: scale(1.01);
+}
+
+/* ÍCONE ANIMADO */
+.upload-icon {
+    font-size: 50px;
+    animation: pulse 2s infinite;
+}
+
+@keyframes pulse {
+    0% {opacity: 0.5;}
+    50% {opacity: 1;}
+    100% {opacity: 0.5;}
+}
+
+/* METRICS */
+.stMetric {
+    background: linear-gradient(145deg, #111827, #1f2937);
+    padding: 18px;
+    border-radius: 14px;
+    box-shadow: 0px 4px 20px rgba(0,0,0,0.4);
+}
+
+/* BOTÃO */
+.stDownloadButton>button {
+    background: linear-gradient(90deg, #16a34a, #22c55e);
+    color: white;
+    border-radius: 12px;
+    height: 55px;
+    font-weight: bold;
+    transition: 0.3s;
+}
+
+.stDownloadButton>button:hover {
+    transform: scale(1.05);
+}
+
 </style>
 """, unsafe_allow_html=True)
 
-# ===== HEADER (INALTERADO) =====
+# ===== HEADER =====
 col1, col2 = st.columns([2, 4])
 
 with col1:
@@ -34,33 +91,18 @@ with col2:
 
 st.markdown("---")
 
-# ===== LANDING =====
-if "iniciado" not in st.session_state:
-    st.session_state.iniciado = False
+# ===== UPLOAD PREMIUM =====
+st.markdown("""
+<div class="upload-box">
+    <div class="upload-icon">📎</div>
+    <h3>Arraste sua fatura ou clique para enviar</h3>
+    <p>PDF • Seguro • Processamento automático</p>
+</div>
+""", unsafe_allow_html=True)
 
-if not st.session_state.iniciado:
+uploaded_files = st.file_uploader("", type="pdf", accept_multiple_files=True)
 
-    st.markdown("""
-    ### 🚀 Reduza custos de telecom com inteligência
-
-    Faça upload da fatura e receba automaticamente:
-
-    - Diagnóstico completo por linha  
-    - Identificação de oportunidades  
-    - Recomendações comerciais  
-    - Relatório profissional em Excel  
-    """)
-
-    if st.button("Iniciar Análise"):
-        st.session_state.iniciado = True
-        st.rerun()
-
-# ===== UPLOAD (INALTERADO) =====
-if st.session_state.iniciado:
-    st.markdown("### 📎 Envie suas faturas")
-    uploaded_files = st.file_uploader("", type="pdf", accept_multiple_files=True)
-
-# ===== FUNÇÕES BASE (INALTERADAS) =====
+# ===== BASE (INALTERADA) =====
 
 def extrair_cliente(texto):
     linhas = texto.split("\n")
@@ -185,29 +227,14 @@ def extrair_gb_pacote(pacote):
         return int(m.group(1))
     return 0
 
-# ===== PROCESSAMENTO (COM PROGRESSO REAL) =====
-
 def processar_pdf(file):
-
     texto = ""
 
     with pdfplumber.open(file) as pdf:
-
-        total_paginas = len(pdf.pages)
-        progresso = st.progress(0)
-        status = st.empty()
-
-        for i, page in enumerate(pdf.pages):
-
-            status.text(f"📄 Processando página {i+1} de {total_paginas}")
-
+        for page in pdf.pages:
             t = page.extract_text()
             if t:
                 texto += t + "\n"
-
-            progresso.progress((i + 1) / total_paginas)
-
-    status.text("🔍 Extraindo dados...")
 
     cliente = extrair_cliente(texto)
     linhas = extrair_linhas(texto)
@@ -287,7 +314,6 @@ def processar_pdf(file):
     return df, cliente
 
 # ===== GERAR EXCEL (BASE INTACTA) =====
-
 def gerar_excel(df):
 
     wb = Workbook()
@@ -365,11 +391,9 @@ def gerar_excel(df):
     for col in ws.columns:
         max_length = 0
         col_letter = col[0].column_letter
-
         for cell in col:
             if cell.value:
                 max_length = max(max_length, len(str(cell.value)))
-
         ws.column_dimensions[col_letter].width = max_length + 3
 
     ws.freeze_panes = "A2"
@@ -383,20 +407,23 @@ def gerar_excel(df):
 
 # ===== EXECUÇÃO =====
 
-if st.session_state.iniciado and uploaded_files:
+if uploaded_files:
 
     df_total = pd.DataFrame()
     cliente_nome = "CLIENTE"
 
-    for file in uploaded_files:
+    progress = st.progress(0)
+    total_files = len(uploaded_files)
+
+    for i, file in enumerate(uploaded_files):
         with st.spinner(f"Processando {file.name}..."):
             df, cliente = processar_pdf(file)
             df_total = pd.concat([df_total, df])
             cliente_nome = cliente
 
-    if not df_total.empty:
+        progress.progress((i + 1) / total_files)
 
-        st.success("✅ Processamento concluído")
+    if not df_total.empty:
 
         col1, col2, col3, col4 = st.columns(4)
 
