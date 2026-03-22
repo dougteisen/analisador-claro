@@ -227,14 +227,28 @@ def extrair_gb_pacote(pacote):
         return int(m.group(1))
     return 0
 
+# ===== ALTERAÇÃO: LOADER REAL =====
+
 def processar_pdf(file):
     texto = ""
 
     with pdfplumber.open(file) as pdf:
-        for page in pdf.pages:
+
+        total_paginas = len(pdf.pages)
+        progresso = st.progress(0)
+        status = st.empty()
+
+        for i, page in enumerate(pdf.pages):
+
+            status.text(f"📄 Processando página {i+1} de {total_paginas}")
+
             t = page.extract_text()
             if t:
                 texto += t + "\n"
+
+            progresso.progress((i + 1) / total_paginas)
+
+        status.text("🔍 Extraindo dados...")
 
     cliente = extrair_cliente(texto)
     linhas = extrair_linhas(texto)
@@ -313,7 +327,8 @@ def processar_pdf(file):
 
     return df, cliente
 
-# ===== GERAR EXCEL (BASE INTACTA) =====
+# ===== GERAR EXCEL (INALTERADO) =====
+
 def gerar_excel(df):
 
     wb = Workbook()
