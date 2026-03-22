@@ -25,6 +25,31 @@ h1, h2, h3 {
     padding-top: 1.5rem;
 }
 
+.upload-box {
+    border: 2px dashed #334155;
+    border-radius: 16px;
+    padding: 40px;
+    text-align: center;
+    background: #020617;
+    transition: 0.3s;
+}
+
+.upload-box:hover {
+    border-color: #22c55e;
+    transform: scale(1.01);
+}
+
+.upload-icon {
+    font-size: 50px;
+    animation: pulse 2s infinite;
+}
+
+@keyframes pulse {
+    0% {opacity: 0.5;}
+    50% {opacity: 1;}
+    100% {opacity: 0.5;}
+}
+
 .stMetric {
     background: linear-gradient(145deg, #111827, #1f2937);
     padding: 18px;
@@ -61,13 +86,17 @@ with col2:
 st.markdown("---")
 
 # ===== UPLOAD =====
-uploaded_files = st.file_uploader(
-    "📎 Selecione sua fatura para upload",
-    type="pdf",
-    accept_multiple_files=True
-)
+st.markdown("""
+<div class="upload-box">
+    <div class="upload-icon">📎</div>
+    <h3>Arraste sua fatura ou clique para enviar</h3>
+    <p>PDF • Seguro • Processamento automático</p>
+</div>
+""", unsafe_allow_html=True)
 
-# ===== BASE (INALTERADA) =====
+uploaded_files = st.file_uploader("", type="pdf", accept_multiple_files=True)
+
+# ===== BASE =====
 
 def extrair_cliente(texto):
     linhas = texto.split("\n")
@@ -99,6 +128,7 @@ def extrair_mensalidades(texto):
             mapa[linha] = total.group(1)
     return mapa
 
+# ===== CORREÇÃO AQUI =====
 def extrair_pacote_e_passaporte(texto):
     blocos = re.split(r"DETALHAMENTO DE LIGAÇÕES E SERVIÇOS DO CELULAR", texto)
     resultado = {}
@@ -118,6 +148,7 @@ def extrair_pacote_e_passaporte(texto):
         if m:
             pacote = m.group(1)
 
+        # ===== NOVA LÓGICA SEGURA =====
         secao = re.search(
             r"Mensalidades e Pacotes Promocionais(.*?)TOTAL\s+R\$",
             bloco,
@@ -393,45 +424,45 @@ def gerar_excel(df):
 
 if uploaded_files:
 
-    total_files = len(uploaded_files)
+    df_total = pd.DataFrame()
+    cliente_nome = "CLIENTE"
+    vencimento_fatura = ""
+
     progress = st.progress(0)
+    total_files = len(uploaded_files)
 
     for i, file in enumerate(uploaded_files):
-
-        with st.container():
-
-            st.markdown(f"## 📄 {file.name}")
-
-            with st.spinner(f"Processando {file.name}..."):
-                df, cliente, vencimento = processar_pdf(file)
-
-            if not df.empty:
-
-                col1, col2, col3, col4 = st.columns(4)
-
-                total_linhas = len(df)
-                em_uso = (df["Em Uso"] == "Sim").sum()
-                total_gb = df["Internet (MB)"].sum() / 1024
-                media_gb = total_gb / total_linhas if total_linhas else 0
-
-                col1.metric("Linhas", total_linhas)
-                col2.metric("Em uso", em_uso)
-                col3.metric("Total GB", round(total_gb, 1))
-                col4.metric("Média GB", round(media_gb, 1))
-
-                st.dataframe(df)
-
-                excel = gerar_excel(df)
-
-                nome_arquivo = f"Analise_Target_{cliente}_{vencimento}.xlsx" if vencimento else f"Analise_Target_{cliente}.xlsx"
-
-                st.download_button(
-                    "📥 Baixar Relatório Excel",
-                    data=excel,
-                    file_name=nome_arquivo,
-                    key=f"download_{i}"
-                )
-
-            st.markdown("---")
+        with st.spinner(f"Processando {file.name}..."):
+            df, cliente, vencimento = processar_pdf(file)
+            df_total = pd.concat([df_total, df])
+            cliente_nome = cliente
+            vencimento_fatura = vencimento
 
         progress.progress((i + 1) / total_files)
+
+    if not df_total.empty:
+
+        col1, col2, col3, col4 = st.columns(4)
+
+        total_linhas = len(df_total)
+        em_uso = (df_total["Em Uso"] == "Sim").sum()
+        total_gb = df_total["Internet (MB)"].sum() / 1024
+        media_gb = total_gb / total_linhas if total_linhas else 0
+
+        col1.metric("Linhas", total_linhas)
+        col2.metric("Em uso", em_uso)
+        col3.metric("Total GB", round(total_gb, 1))
+        col4.metric("Média GB", round(media_gb, 1))
+
+        st.markdown("---")
+        st.dataframe(df_total)
+
+        excel = gerar_excel(df_total)
+
+        nome_arquivo = f"Analise_Target_{cliente_nome}_{vencimento_fatura}.xlsx" if vencimento_fatura else f"Analise_Target_{cliente_nome}.xlsx"
+
+        st.download_button(
+            "📥 Baixar Relatório Excel",
+            data=excel,
+            file_name=nome_arquivo
+        )
