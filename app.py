@@ -115,6 +115,13 @@ def extrair_cliente(texto):
                 return nome
     return "CLIENTE"
 
+# ===== NOVA FUNÇÃO (CIRÚRGICA) =====
+def extrair_vencimento(texto):
+    match = re.search(r"Nº da conta:.*?(\d{2}/\d{2}/\d{4})", texto)
+    if match:
+        return match.group(1)
+    return ""
+
 def extrair_mensalidades(texto):
     blocos = re.split(r"DETALHAMENTO DE LIGAÇÕES E SERVIÇOS DO CELULAR", texto)
     mapa = {}
@@ -251,6 +258,7 @@ def processar_pdf(file):
         status.text("🔍 Extraindo dados...")
 
     cliente = extrair_cliente(texto)
+    vencimento = extrair_vencimento(texto)  # ← NOVO
     linhas = extrair_linhas(texto)
     mensalidades = extrair_mensalidades(texto)
     detalhamento = extrair_detalhamento(texto)
@@ -325,12 +333,10 @@ def processar_pdf(file):
 
     df["Estratégia Comercial"] = df.apply(estrategia, axis=1)
 
-    return df, cliente
+    return df, cliente, vencimento  # ← ALTERADO (mínimo)
 
 # ===== GERAR EXCEL (INALTERADO) =====
-
 def gerar_excel(df):
-
     wb = Workbook()
     ws = wb.active
     ws.title = "Detalhamento"
@@ -426,15 +432,17 @@ if uploaded_files:
 
     df_total = pd.DataFrame()
     cliente_nome = "CLIENTE"
+    vencimento_fatura = ""
 
     progress = st.progress(0)
     total_files = len(uploaded_files)
 
     for i, file in enumerate(uploaded_files):
         with st.spinner(f"Processando {file.name}..."):
-            df, cliente = processar_pdf(file)
+            df, cliente, vencimento = processar_pdf(file)
             df_total = pd.concat([df_total, df])
             cliente_nome = cliente
+            vencimento_fatura = vencimento
 
         progress.progress((i + 1) / total_files)
 
@@ -457,8 +465,10 @@ if uploaded_files:
 
         excel = gerar_excel(df_total)
 
+        nome_arquivo = f"Analise_Target_{cliente_nome}_{vencimento_fatura}.xlsx" if vencimento_fatura else f"Analise_Target_{cliente_nome}.xlsx"
+
         st.download_button(
             "📥 Baixar Relatório Excel",
             data=excel,
-            file_name=f"Analise_Target_{cliente_nome}.xlsx"
+            file_name=nome_arquivo
         )
