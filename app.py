@@ -85,16 +85,12 @@ with col2:
 
 st.markdown("---")
 
-# ===== UPLOAD =====
-st.markdown("""
-<div class="upload-box">
-    <div class="upload-icon">📎</div>
-    <h3>Arraste sua fatura ou clique para enviar</h3>
-    <p>PDF • Seguro • Processamento automático</p>
-</div>
-""", unsafe_allow_html=True)
-
-uploaded_files = st.file_uploader("", type="pdf", accept_multiple_files=True)
+# ===== UPLOAD (AGORA SOMENTE BOTÃO FUNCIONAL) =====
+uploaded_files = st.file_uploader(
+    "📎 Selecione sua fatura para upload",
+    type="pdf",
+    accept_multiple_files=True
+)
 
 # ===== BASE =====
 
@@ -128,7 +124,6 @@ def extrair_mensalidades(texto):
             mapa[linha] = total.group(1)
     return mapa
 
-# ===== CORREÇÃO AQUI =====
 def extrair_pacote_e_passaporte(texto):
     blocos = re.split(r"DETALHAMENTO DE LIGAÇÕES E SERVIÇOS DO CELULAR", texto)
     resultado = {}
@@ -148,7 +143,6 @@ def extrair_pacote_e_passaporte(texto):
         if m:
             pacote = m.group(1)
 
-        # ===== NOVA LÓGICA SEGURA =====
         secao = re.search(
             r"Mensalidades e Pacotes Promocionais(.*?)TOTAL\s+R\$",
             bloco,
