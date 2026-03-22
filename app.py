@@ -3,28 +3,58 @@ import pdfplumber
 import pandas as pd
 import io
 import re
-import time
 from openpyxl import Workbook
 from openpyxl.utils.dataframe import dataframe_to_rows
 from openpyxl.styles import Alignment, PatternFill, Font, Border, Side
 
 st.set_page_config(layout="wide")
 
-# ===== CSS PREMIUM =====
+# ===== CSS SaaS PROFISSIONAL =====
 st.markdown("""
 <style>
+
 .main {
     background: linear-gradient(180deg, #0f172a 0%, #020617 100%);
+}
+
+/* HEADER */
+h1, h2, h3 {
+    color: white;
 }
 
 .block-container {
     padding-top: 1.5rem;
 }
 
-h1, h2, h3 {
-    color: white;
+/* DROPZONE */
+.upload-box {
+    border: 2px dashed #334155;
+    border-radius: 16px;
+    padding: 40px;
+    text-align: center;
+    background: #020617;
+    transition: 0.3s;
 }
 
+.upload-box:hover {
+    border-color: #22c55e;
+    background: #020617;
+    transform: scale(1.01);
+}
+
+/* ÍCONE ANIMADO */
+.upload-icon {
+    font-size: 50px;
+    animation: pulse 2s infinite;
+}
+
+@keyframes pulse {
+    0% {opacity: 0.5;}
+    50% {opacity: 1;}
+    100% {opacity: 0.5;}
+}
+
+/* METRICS */
 .stMetric {
     background: linear-gradient(145deg, #111827, #1f2937);
     padding: 18px;
@@ -32,6 +62,7 @@ h1, h2, h3 {
     box-shadow: 0px 4px 20px rgba(0,0,0,0.4);
 }
 
+/* BOTÃO */
 .stDownloadButton>button {
     background: linear-gradient(90deg, #16a34a, #22c55e);
     color: white;
@@ -42,8 +73,9 @@ h1, h2, h3 {
 }
 
 .stDownloadButton>button:hover {
-    transform: scale(1.03);
+    transform: scale(1.05);
 }
+
 </style>
 """, unsafe_allow_html=True)
 
@@ -59,9 +91,18 @@ with col2:
 
 st.markdown("---")
 
-uploaded_files = st.file_uploader("Envie PDFs", type="pdf", accept_multiple_files=True)
+# ===== UPLOAD PREMIUM =====
+st.markdown("""
+<div class="upload-box">
+    <div class="upload-icon">📎</div>
+    <h3>Arraste sua fatura ou clique para enviar</h3>
+    <p>PDF • Seguro • Processamento automático</p>
+</div>
+""", unsafe_allow_html=True)
 
-# ===== FUNÇÕES BASE =====
+uploaded_files = st.file_uploader("", type="pdf", accept_multiple_files=True)
+
+# ===== BASE (INALTERADA) =====
 
 def extrair_cliente(texto):
     linhas = texto.split("\n")
@@ -272,7 +313,7 @@ def processar_pdf(file):
 
     return df, cliente
 
-# ===== GERAR EXCEL BASE (RESTAURADO) =====
+# ===== GERAR EXCEL (BASE INTACTA) =====
 def gerar_excel(df):
 
     wb = Workbook()
@@ -284,12 +325,8 @@ def gerar_excel(df):
     for r in dataframe_to_rows(df_reset, index=False, header=True):
         ws.append(r)
 
-    borda = Border(
-        left=Side(style='thin'),
-        right=Side(style='thin'),
-        top=Side(style='thin'),
-        bottom=Side(style='thin')
-    )
+    borda = Border(left=Side(style='thin'), right=Side(style='thin'),
+                   top=Side(style='thin'), bottom=Side(style='thin'))
 
     header_fill = PatternFill(start_color="333333", fill_type="solid")
     zebra = PatternFill(start_color="F2F2F2", fill_type="solid")
@@ -354,11 +391,9 @@ def gerar_excel(df):
     for col in ws.columns:
         max_length = 0
         col_letter = col[0].column_letter
-
         for cell in col:
             if cell.value:
                 max_length = max(max_length, len(str(cell.value)))
-
         ws.column_dimensions[col_letter].width = max_length + 3
 
     ws.freeze_panes = "A2"
