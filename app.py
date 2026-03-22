@@ -102,7 +102,7 @@ st.markdown("""
 
 uploaded_files = st.file_uploader("", type="pdf", accept_multiple_files=True)
 
-# ===== BASE (INALTERADA) =====
+# ===== BASE =====
 
 def extrair_cliente(texto):
     linhas = texto.split("\n")
@@ -115,7 +115,6 @@ def extrair_cliente(texto):
                 return nome
     return "CLIENTE"
 
-# ===== NOVA FUNÇÃO (CIRÚRGICA) =====
 def extrair_vencimento(texto):
     match = re.search(r"Nº da conta:.*?(\d{2}/\d{2}/\d{4})", texto)
     if match:
@@ -135,6 +134,7 @@ def extrair_mensalidades(texto):
             mapa[linha] = total.group(1)
     return mapa
 
+# ===== CORREÇÃO AQUI =====
 def extrair_pacote_e_passaporte(texto):
     blocos = re.split(r"DETALHAMENTO DE LIGAÇÕES E SERVIÇOS DO CELULAR", texto)
     resultado = {}
@@ -154,18 +154,18 @@ def extrair_pacote_e_passaporte(texto):
         if m:
             pacote = m.group(1)
 
+        # ===== NOVA LÓGICA FLEXÍVEL =====
         for linha_bloco in bloco.split("\n"):
             linha_limpa = linha_bloco.strip()
 
-            if not linha_limpa.startswith("Claro Passaporte"):
-                continue
-            if "-" in linha_limpa:
+            if "Claro Passaporte" not in linha_limpa:
                 continue
 
-            m = re.search(r"Claro (Passaporte .*?GB)\s+([\d]+,\d{2})$", linha_limpa)
+            m = re.search(r"(Claro Passaporte.*?GB).*?([\d]+,\d{2})$", linha_limpa)
+
             if m:
-                passaporte = m.group(1)
-                valor_passaporte = m.group(2)
+                passaporte = m.group(1).strip()
+                valor_passaporte = m.group(2).strip()
                 break
 
         resultado[linha] = {
@@ -234,8 +234,6 @@ def extrair_gb_pacote(pacote):
         return int(m.group(1))
     return 0
 
-# ===== ALTERAÇÃO: LOADER REAL =====
-
 def processar_pdf(file):
     texto = ""
 
@@ -246,7 +244,6 @@ def processar_pdf(file):
         status = st.empty()
 
         for i, page in enumerate(pdf.pages):
-
             status.text(f"📄 Processando página {i+1} de {total_paginas}")
 
             t = page.extract_text()
@@ -258,7 +255,7 @@ def processar_pdf(file):
         status.text("🔍 Extraindo dados...")
 
     cliente = extrair_cliente(texto)
-    vencimento = extrair_vencimento(texto)  # ← NOVO
+    vencimento = extrair_vencimento(texto)
     linhas = extrair_linhas(texto)
     mensalidades = extrair_mensalidades(texto)
     detalhamento = extrair_detalhamento(texto)
@@ -333,9 +330,8 @@ def processar_pdf(file):
 
     df["Estratégia Comercial"] = df.apply(estrategia, axis=1)
 
-    return df, cliente, vencimento  # ← ALTERADO (mínimo)
+    return df, cliente, vencimento
 
-# ===== GERAR EXCEL (INALTERADO) =====
 def gerar_excel(df):
     wb = Workbook()
     ws = wb.active
