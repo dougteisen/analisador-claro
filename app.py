@@ -54,7 +54,6 @@ h1, h2, h3 {
     background: linear-gradient(145deg, #111827, #1f2937);
     padding: 18px;
     border-radius: 14px;
-    box-shadow: 0px 4px 20px rgba(0,0,0,0.4);
 }
 
 .stDownloadButton>button {
@@ -63,11 +62,6 @@ h1, h2, h3 {
     border-radius: 12px;
     height: 55px;
     font-weight: bold;
-    transition: 0.3s;
-}
-
-.stDownloadButton>button:hover {
-    transform: scale(1.05);
 }
 
 </style>
@@ -96,7 +90,7 @@ st.markdown("""
 
 uploaded_files = st.file_uploader("", type="pdf", accept_multiple_files=True)
 
-# ===== BASE =====
+# ===== FUNÇÕES =====
 
 def extrair_cliente(texto):
     linhas = texto.split("\n")
@@ -108,12 +102,6 @@ def extrair_cliente(texto):
                 nome = re.sub(r"\s+", " ", nome)
                 return nome
     return "CLIENTE"
-
-def extrair_vencimento(texto):
-    match = re.search(r"Nº da conta:.*?(\d{2}/\d{2}/\d{4})", texto)
-    if match:
-        return match.group(1)
-    return ""
 
 def extrair_mensalidades(texto):
     blocos = re.split(r"DETALHAMENTO DE LIGAÇÕES E SERVIÇOS DO CELULAR", texto)
@@ -128,7 +116,6 @@ def extrair_mensalidades(texto):
             mapa[linha] = total.group(1)
     return mapa
 
-# ===== CORREÇÃO AQUI =====
 def extrair_pacote_e_passaporte(texto):
     blocos = re.split(r"DETALHAMENTO DE LIGAÇÕES E SERVIÇOS DO CELULAR", texto)
     resultado = {}
@@ -144,32 +131,24 @@ def extrair_pacote_e_passaporte(texto):
         passaporte = "-"
         valor_passaporte = "0"
 
-        m = re.search(r"(Claro Pós\s*\d+GB)", bloco)
+        # 🔥 CORREÇÃO AQUI (SUPORTE LIFE)
+        m = re.search(r"(Claro (Pós|Life Ilimitado)\s*\d+GB)", bloco)
         if m:
             pacote = m.group(1)
 
-        # ===== NOVA LÓGICA SEGURA =====
-        secao = re.search(
-            r"Mensalidades e Pacotes Promocionais(.*?)TOTAL\s+R\$",
-            bloco,
-            re.DOTALL
-        )
+        for linha_bloco in bloco.split("\n"):
+            linha_limpa = linha_bloco.strip()
 
-        if secao:
-            trecho = secao.group(1)
+            if not linha_limpa.startswith("Claro Passaporte"):
+                continue
+            if "-" in linha_limpa:
+                continue
 
-            for linha_bloco in trecho.split("\n"):
-                linha_limpa = linha_bloco.strip()
-
-                if "Claro Passaporte" not in linha_limpa:
-                    continue
-
-                m = re.search(r"(Claro Passaporte.*?GB).*?([\d]+,\d{2})$", linha_limpa)
-
-                if m:
-                    passaporte = m.group(1).strip()
-                    valor_passaporte = m.group(2).strip()
-                    break
+            m = re.search(r"Claro (Passaporte .*?GB)\s+([\d]+,\d{2})$", linha_limpa)
+            if m:
+                passaporte = m.group(1)
+                valor_passaporte = m.group(2)
+                break
 
         resultado[linha] = {
             "Pacote": pacote,
@@ -241,21 +220,23 @@ def processar_pdf(file):
     texto = ""
 
     with pdfplumber.open(file) as pdf:
+
         total_paginas = len(pdf.pages)
         progresso = st.progress(0)
         status = st.empty()
 
         for i, page in enumerate(pdf.pages):
             status.text(f"📄 Processando página {i+1} de {total_paginas}")
+
             t = page.extract_text()
             if t:
                 texto += t + "\n"
+
             progresso.progress((i + 1) / total_paginas)
 
         status.text("🔍 Extraindo dados...")
 
     cliente = extrair_cliente(texto)
-    vencimento = extrair_vencimento(texto)
     linhas = extrair_linhas(texto)
     mensalidades = extrair_mensalidades(texto)
     detalhamento = extrair_detalhamento(texto)
@@ -264,8 +245,10 @@ def processar_pdf(file):
     dados = []
 
     for linha in linhas:
+
         total = to_float(mensalidades.get(linha, "0"))
         valor_passaporte = to_float(pacotes.get(linha, {}).get("Valor Passaporte", "0"))
+
         valor_plano = total - valor_passaporte
 
         dados.append({
@@ -328,97 +311,7 @@ def processar_pdf(file):
 
     df["Estratégia Comercial"] = df.apply(estrategia, axis=1)
 
-    return df, cliente, vencimento
-
-def gerar_excel(df):
-    wb = Workbook()
-    ws = wb.active
-    ws.title = "Detalhamento"
-
-    df_reset = df.reset_index(drop=True)
-
-    for r in dataframe_to_rows(df_reset, index=False, header=True):
-        ws.append(r)
-
-    borda = Border(left=Side(style='thin'), right=Side(style='thin'),
-                   top=Side(style='thin'), bottom=Side(style='thin'))
-
-    header_fill = PatternFill(start_color="333333", fill_type="solid")
-    zebra = PatternFill(start_color="F2F2F2", fill_type="solid")
-
-    vermelho = PatternFill(start_color="FF4C4C", fill_type="solid")
-    verde = PatternFill(start_color="C6EFCE", fill_type="solid")
-    amarelo = PatternFill(start_color="FFF3B0", fill_type="solid")
-    azul = PatternFill(start_color="BDD7EE", fill_type="solid")
-    cinza = PatternFill(start_color="D9D9D9", fill_type="solid")
-
-    headers = [cell.value for cell in ws[1]]
-
-    for cell in ws[1]:
-        cell.font = Font(bold=True, color="FFFFFF")
-        cell.fill = header_fill
-        cell.alignment = Alignment(horizontal="center", vertical="center")
-        cell.border = borda
-
-    for i, row in enumerate(ws.iter_rows(min_row=2), start=2):
-
-        for j, cell in enumerate(row):
-            coluna = headers[j]
-
-            if coluna == "Perfil":
-                cell.alignment = Alignment(horizontal="left", vertical="center")
-            elif coluna == "Minutos":
-                cell.alignment = Alignment(horizontal="center", vertical="center")
-            elif coluna == "Estratégia Comercial":
-                cell.alignment = Alignment(horizontal="left", vertical="center")
-            else:
-                cell.alignment = Alignment(horizontal="center", vertical="center")
-
-            cell.border = borda
-
-        if i % 2 == 0:
-            for cell in row:
-                cell.fill = zebra
-
-        perfil = str(row[8].value)
-        uso = str(row[9].value)
-        estrategia = str(row[10].value)
-
-        if "Alto" in perfil:
-            row[8].fill = vermelho
-        elif "Médio" in perfil:
-            row[8].fill = amarelo
-
-        if uso == "Não":
-            row[9].fill = vermelho
-        else:
-            row[9].fill = verde
-
-        if "Manter" in estrategia:
-            row[10].fill = cinza
-        elif "Sustentar" in estrategia:
-            row[10].fill = amarelo
-        elif "Bem dimensionado" in estrategia:
-            row[10].fill = verde
-        elif "Upsell" in estrategia:
-            row[10].fill = azul
-
-    for col in ws.columns:
-        max_length = 0
-        col_letter = col[0].column_letter
-        for cell in col:
-            if cell.value:
-                max_length = max(max_length, len(str(cell.value)))
-        ws.column_dimensions[col_letter].width = max_length + 3
-
-    ws.freeze_panes = "A2"
-    ws.auto_filter.ref = ws.dimensions
-
-    buffer = io.BytesIO()
-    wb.save(buffer)
-    buffer.seek(0)
-
-    return buffer
+    return df, cliente
 
 # ===== EXECUÇÃO =====
 
@@ -426,17 +319,15 @@ if uploaded_files:
 
     df_total = pd.DataFrame()
     cliente_nome = "CLIENTE"
-    vencimento_fatura = ""
 
     progress = st.progress(0)
     total_files = len(uploaded_files)
 
     for i, file in enumerate(uploaded_files):
         with st.spinner(f"Processando {file.name}..."):
-            df, cliente, vencimento = processar_pdf(file)
+            df, cliente = processar_pdf(file)
             df_total = pd.concat([df_total, df])
             cliente_nome = cliente
-            vencimento_fatura = vencimento
 
         progress.progress((i + 1) / total_files)
 
@@ -459,10 +350,8 @@ if uploaded_files:
 
         excel = gerar_excel(df_total)
 
-        nome_arquivo = f"Analise_Target_{cliente_nome}_{vencimento_fatura}.xlsx" if vencimento_fatura else f"Analise_Target_{cliente_nome}.xlsx"
-
         st.download_button(
             "📥 Baixar Relatório Excel",
             data=excel,
-            file_name=nome_arquivo
+            file_name=f"Analise_Target_{cliente_nome}.xlsx"
         )
