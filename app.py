@@ -8,77 +8,323 @@ from openpyxl import Workbook
 from openpyxl.utils.dataframe import dataframe_to_rows
 from openpyxl.styles import Alignment, PatternFill, Font, Border, Side
 
-st.set_page_config(layout="wide")
+st.set_page_config(
+    layout="wide",
+    page_title="Target Telecom · Análise de Faturas",
+    page_icon="📡"
+)
 
-# ===== CSS =====
+# ===== CSS REDESIGN =====
 st.markdown("""
 <style>
-.main { background: linear-gradient(180deg, #0f172a 0%, #020617 100%); }
-h1, h2, h3 { color: white; }
-.block-container { padding-top: 1.5rem; }
-.upload-box {
-    border: 2px dashed #334155; border-radius: 16px; padding: 40px;
-    text-align: center; background: #020617; transition: 0.3s;
+@import url('https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&family=DM+Sans:wght@300;400;500&display=swap');
+
+/* ── Base & Background ── */
+html, body, [data-testid="stAppViewContainer"] {
+    background: #060d1a !important;
 }
-.upload-box:hover { border-color: #22c55e; transform: scale(1.01); }
-.upload-icon { font-size: 50px; animation: pulse 2s infinite; }
-@keyframes pulse { 0%{opacity:0.5;} 50%{opacity:1;} 100%{opacity:0.5;} }
-.stMetric {
-    background: linear-gradient(145deg, #111827, #1f2937);
-    padding: 18px; border-radius: 14px; box-shadow: 0px 4px 20px rgba(0,0,0,0.4);
+.main {
+    background: #060d1a !important;
 }
-.stDownloadButton>button {
-    background: linear-gradient(90deg, #16a34a, #22c55e);
-    color: white; border-radius: 12px; height: 55px; font-weight: bold; transition: 0.3s;
+[data-testid="stAppViewContainer"]::before {
+    content: '';
+    position: fixed;
+    top: -20%;
+    left: -10%;
+    width: 55%;
+    height: 55%;
+    background: radial-gradient(ellipse, rgba(16,185,129,0.07) 0%, transparent 70%);
+    pointer-events: none;
+    z-index: 0;
 }
-.stDownloadButton>button:hover { transform: scale(1.05); }
+[data-testid="stAppViewContainer"]::after {
+    content: '';
+    position: fixed;
+    bottom: -10%;
+    right: -5%;
+    width: 40%;
+    height: 40%;
+    background: radial-gradient(ellipse, rgba(59,130,246,0.06) 0%, transparent 70%);
+    pointer-events: none;
+    z-index: 0;
+}
+.block-container {
+    padding-top: 2rem !important;
+    padding-bottom: 3rem !important;
+    max-width: 1400px !important;
+}
+
+/* ── Tipografia global ── */
+*, h1, h2, h3, h4, p, span, div, label {
+    font-family: 'DM Sans', sans-serif !important;
+    color: #e2e8f0;
+}
+
+/* ── Header personalizado ── */
+.tt-header {
+    display: flex;
+    align-items: center;
+    gap: 20px;
+    padding: 28px 36px;
+    background: linear-gradient(135deg, #0d1f2d 0%, #0a1628 100%);
+    border: 1px solid rgba(16,185,129,0.18);
+    border-radius: 20px;
+    margin-bottom: 28px;
+    position: relative;
+    overflow: hidden;
+}
+.tt-header::before {
+    content: '';
+    position: absolute;
+    top: 0; left: 0; right: 0;
+    height: 2px;
+    background: linear-gradient(90deg, transparent, #10b981, #3b82f6, transparent);
+}
+.tt-logo-placeholder {
+    width: 56px; height: 56px;
+    background: linear-gradient(135deg, #10b981, #059669);
+    border-radius: 14px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 26px;
+    flex-shrink: 0;
+    box-shadow: 0 0 24px rgba(16,185,129,0.35);
+}
+.tt-brand h1 {
+    font-family: 'Syne', sans-serif !important;
+    font-size: 1.75rem !important;
+    font-weight: 800 !important;
+    letter-spacing: -0.02em;
+    margin: 0 !important; padding: 0 !important;
+    background: linear-gradient(90deg, #ffffff, #a7f3d0);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+    line-height: 1.1 !important;
+}
+.tt-brand p {
+    font-size: 0.82rem;
+    color: #64748b !important;
+    margin: 4px 0 0 0;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    font-weight: 500;
+}
+.tt-badge {
+    margin-left: auto;
+    padding: 6px 14px;
+    background: rgba(16,185,129,0.1);
+    border: 1px solid rgba(16,185,129,0.25);
+    border-radius: 20px;
+    font-size: 0.72rem;
+    color: #10b981 !important;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    font-weight: 600;
+}
+
+/* ── Divider ── */
+hr {
+    border: none !important;
+    border-top: 1px solid rgba(255,255,255,0.06) !important;
+    margin: 1.5rem 0 !important;
+}
+
+/* ── Upload Area ── */
+[data-testid="stFileUploader"] {
+    background: linear-gradient(135deg, #0d1f2d 0%, #091523 100%) !important;
+    border: 1.5px dashed rgba(16,185,129,0.35) !important;
+    border-radius: 18px !important;
+    padding: 8px 16px !important;
+    transition: all 0.3s ease !important;
+    position: relative;
+}
+[data-testid="stFileUploader"]:hover {
+    border-color: rgba(16,185,129,0.75) !important;
+    background: linear-gradient(135deg, #0f2535 0%, #0c1d2e 100%) !important;
+    box-shadow: 0 0 30px rgba(16,185,129,0.08) !important;
+}
+[data-testid="stFileUploaderDropzone"] {
+    background: transparent !important;
+    border: none !important;
+}
+[data-testid="stFileUploaderDropzoneInstructions"] p,
+[data-testid="stFileUploaderDropzoneInstructions"] span {
+    color: #94a3b8 !important;
+    font-size: 0.9rem !important;
+    font-family: 'DM Sans', sans-serif !important;
+}
+[data-testid="stFileUploaderDropzone"] svg {
+    fill: #10b981 !important;
+    opacity: 0.8;
+}
+[data-testid="stFileUploader"] label {
+    font-size: 0.95rem !important;
+    color: #cbd5e1 !important;
+    font-weight: 500 !important;
+}
+
+/* ── Métricas ── */
+[data-testid="metric-container"] {
+    background: linear-gradient(145deg, #0d1f2d, #0a1929) !important;
+    border: 1px solid rgba(255,255,255,0.07) !important;
+    border-radius: 16px !important;
+    padding: 20px 24px !important;
+    position: relative;
+    overflow: hidden;
+    transition: transform 0.2s ease, border-color 0.2s ease;
+}
+[data-testid="metric-container"]:hover {
+    transform: translateY(-2px);
+    border-color: rgba(16,185,129,0.25) !important;
+}
+[data-testid="metric-container"]::before {
+    content: '';
+    position: absolute;
+    top: 0; left: 0; right: 0;
+    height: 2px;
+    background: linear-gradient(90deg, #10b981, #3b82f6);
+    opacity: 0.6;
+}
+[data-testid="stMetricLabel"] {
+    font-size: 0.72rem !important;
+    text-transform: uppercase !important;
+    letter-spacing: 0.1em !important;
+    color: #64748b !important;
+    font-weight: 600 !important;
+}
+[data-testid="stMetricValue"] {
+    font-family: 'Syne', sans-serif !important;
+    font-size: 2rem !important;
+    font-weight: 700 !important;
+    color: #f1f5f9 !important;
+    line-height: 1.2 !important;
+}
+
+/* ── Dataframe ── */
+[data-testid="stDataFrame"] {
+    border: 1px solid rgba(255,255,255,0.07) !important;
+    border-radius: 16px !important;
+    overflow: hidden !important;
+    background: #0a1628 !important;
+}
+[data-testid="stDataFrame"] table {
+    background: transparent !important;
+}
+[data-testid="stDataFrame"] thead th {
+    background: #0d1f2d !important;
+    color: #94a3b8 !important;
+    font-size: 0.72rem !important;
+    text-transform: uppercase !important;
+    letter-spacing: 0.08em !important;
+    border-bottom: 1px solid rgba(255,255,255,0.08) !important;
+    padding: 12px 16px !important;
+}
+[data-testid="stDataFrame"] tbody tr:hover td {
+    background: rgba(16,185,129,0.05) !important;
+}
+
+/* ── Botão de Download ── */
+[data-testid="stDownloadButton"] > button {
+    background: linear-gradient(135deg, #059669 0%, #10b981 100%) !important;
+    color: #fff !important;
+    border: none !important;
+    border-radius: 12px !important;
+    height: 52px !important;
+    font-size: 0.9rem !important;
+    font-weight: 600 !important;
+    letter-spacing: 0.03em !important;
+    width: 100% !important;
+    transition: all 0.25s ease !important;
+    box-shadow: 0 4px 20px rgba(16,185,129,0.25) !important;
+}
+[data-testid="stDownloadButton"] > button:hover {
+    transform: translateY(-2px) !important;
+    box-shadow: 0 8px 28px rgba(16,185,129,0.4) !important;
+    background: linear-gradient(135deg, #047857 0%, #059669 100%) !important;
+}
+
+/* ── Spinner e Progress ── */
+[data-testid="stProgress"] > div > div {
+    background: linear-gradient(90deg, #10b981, #3b82f6) !important;
+    border-radius: 4px !important;
+}
+[data-testid="stProgress"] {
+    background: rgba(255,255,255,0.06) !important;
+    border-radius: 4px !important;
+}
+
+/* ── Alerts / Errors ── */
+[data-testid="stAlert"] {
+    border-radius: 12px !important;
+    border-left: 3px solid #ef4444 !important;
+    background: rgba(239,68,68,0.08) !important;
+}
+
+/* ── Sidebar (se abrir) ── */
+[data-testid="stSidebar"] {
+    background: #060d1a !important;
+    border-right: 1px solid rgba(255,255,255,0.06) !important;
+}
+
+/* ── Seção de resultados ── */
+.tt-section-title {
+    font-family: 'Syne', sans-serif !important;
+    font-size: 0.72rem;
+    font-weight: 700;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: #475569 !important;
+    margin: 8px 0 16px 2px;
+}
+.tt-divider {
+    height: 1px;
+    background: linear-gradient(90deg, rgba(16,185,129,0.3), rgba(59,130,246,0.15), transparent);
+    border: none;
+    margin: 24px 0;
+}
 </style>
 """, unsafe_allow_html=True)
 
 # ===== HEADER =====
-col1, col2 = st.columns([2, 4])
-with col1:
-    if os.path.exists("logo.png"):
-        st.image("logo.png", width=240)
-    else:
-        st.markdown("## 🎯")
-with col2:
-    st.markdown("# TARGET TELECOM")
-    st.markdown("### Inteligência em Faturas Corporativas")
+if os.path.exists("logo.png"):
+    col1, col2 = st.columns([1, 5])
+    with col1:
+        st.image("logo.png", width=180)
+    with col2:
+        st.markdown("""
+        <div style="padding: 12px 0;">
+            <div style="font-family:'Syne',sans-serif;font-size:1.6rem;font-weight:800;
+                        background:linear-gradient(90deg,#fff,#a7f3d0);
+                        -webkit-background-clip:text;-webkit-text-fill-color:transparent;
+                        background-clip:text;letter-spacing:-0.02em;">TARGET TELECOM</div>
+            <div style="font-size:0.78rem;color:#64748b;text-transform:uppercase;
+                        letter-spacing:0.1em;font-weight:500;margin-top:4px;">
+                Inteligência em Faturas Corporativas
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+else:
+    st.markdown("""
+    <div class="tt-header">
+        <div class="tt-logo-placeholder">📡</div>
+        <div class="tt-brand">
+            <h1>TARGET TELECOM</h1>
+            <p>Inteligência em Faturas Corporativas</p>
+        </div>
+        <div class="tt-badge">✦ Análise Automática</div>
+    </div>
+    """, unsafe_allow_html=True)
 
-st.markdown("---")
+st.markdown('<div class="tt-divider"></div>', unsafe_allow_html=True)
 
-st.markdown("""
-<style>
-/* Estiliza a área de upload nativa do Streamlit */
-[data-testid="stFileUploader"] {
-    border: 2px dashed #334155;
-    border-radius: 16px;
-    background: #020617;
-    padding: 10px;
-    transition: 0.3s;
-}
-[data-testid="stFileUploader"]:hover {
-    border-color: #22c55e;
-}
-[data-testid="stFileUploaderDropzone"] {
-    background: transparent !important;
-}
-[data-testid="stFileUploaderDropzoneInstructions"] p,
-[data-testid="stFileUploaderDropzoneInstructions"] span {
-    color: white !important;
-    font-size: 1rem;
-}
-[data-testid="stFileUploaderDropzone"] svg {
-    fill: white;
-}
-</style>
-""", unsafe_allow_html=True)
+# ===== UPLOAD =====
+st.markdown('<p class="tt-section-title">📂 Carregar Fatura</p>', unsafe_allow_html=True)
 
 uploaded_files = st.file_uploader(
-    "📎  Arraste sua fatura ou clique para enviar — PDF • Seguro • Processamento automático",
+    "Arraste o PDF da fatura ou clique para selecionar — múltiplos arquivos suportados",
     type="pdf",
-    accept_multiple_files=True
+    accept_multiple_files=True,
+    label_visibility="visible"
 )
 
 # ===== UTILITÁRIOS =====
@@ -452,30 +698,60 @@ if uploaded_files:
         progress.progress((i + 1) / total_files)
 
     if not df_total.empty:
+        st.markdown('<div class="tt-divider"></div>', unsafe_allow_html=True)
+        st.markdown('<p class="tt-section-title">📊 Resumo da Fatura</p>', unsafe_allow_html=True)
+
         col1, col2, col3, col4 = st.columns(4)
         total_linhas = len(df_total)
-        em_uso = (df_total["Em Uso"] == "Sim").sum()
-        total_gb = df_total["Internet (MB)"].sum() / 1024
-        media_gb = total_gb / total_linhas if total_linhas else 0
+        em_uso       = (df_total["Em Uso"] == "Sim").sum()
+        inativas     = total_linhas - em_uso
+        total_gb     = df_total["Internet (MB)"].sum() / 1024
+        media_gb     = total_gb / total_linhas if total_linhas else 0
 
-        col1.metric("Linhas", total_linhas)
-        col2.metric("Em uso", em_uso)
-        col3.metric("Total GB", round(total_gb, 1))
-        col4.metric("Média GB", round(media_gb, 1))
+        col1.metric("Total de Linhas", total_linhas)
+        col2.metric("Linhas Ativas", em_uso, delta=f"{inativas} inativas" if inativas else None,
+                    delta_color="inverse")
+        col3.metric("Consumo Total", f"{round(total_gb, 1)} GB")
+        col4.metric("Média por Linha", f"{round(media_gb, 1)} GB")
 
-        st.markdown("---")
-        st.dataframe(df_total)
+        st.markdown('<div class="tt-divider"></div>', unsafe_allow_html=True)
+        st.markdown('<p class="tt-section-title">📋 Detalhamento por Linha</p>', unsafe_allow_html=True)
 
-        excel = gerar_excel(df_total)
-
-        nome_arquivo = (
-            f"Analise_Target_{cliente_nome}_{vencimento_fatura}.xlsx"
-            if vencimento_fatura
-            else f"Analise_Target_{cliente_nome}.xlsx"
+        st.dataframe(
+            df_total,
+            use_container_width=True,
+            height=min(600, 60 + len(df_total) * 38),
+            hide_index=True,
         )
 
-        st.download_button(
-            "📥 Baixar Relatório Excel",
-            data=excel,
-            file_name=nome_arquivo
-        )
+        st.markdown('<div class="tt-divider"></div>', unsafe_allow_html=True)
+
+        col_info, col_btn = st.columns([3, 1])
+        with col_info:
+            st.markdown(f"""
+            <div style="padding:14px 18px;background:rgba(16,185,129,0.06);
+                        border:1px solid rgba(16,185,129,0.15);border-radius:12px;">
+                <div style="font-size:0.72rem;color:#64748b;text-transform:uppercase;
+                            letter-spacing:0.08em;font-weight:600;margin-bottom:4px;">
+                    Relatório pronto
+                </div>
+                <div style="font-size:0.9rem;color:#cbd5e1;">
+                    <strong style="color:#10b981;">{total_linhas}</strong> linhas ·
+                    cliente <strong style="color:#e2e8f0;">{cliente_nome}</strong> ·
+                    vencimento <strong style="color:#e2e8f0;">{vencimento_fatura or '—'}</strong>
+                </div>
+            </div>
+            """, unsafe_allow_html=True)
+        with col_btn:
+            excel = gerar_excel(df_total)
+            nome_arquivo = (
+                f"Analise_Target_{cliente_nome}_{vencimento_fatura}.xlsx"
+                if vencimento_fatura
+                else f"Analise_Target_{cliente_nome}.xlsx"
+            )
+            st.download_button(
+                "📥  Baixar Relatório Excel",
+                data=excel,
+                file_name=nome_arquivo,
+                use_container_width=True,
+            )
