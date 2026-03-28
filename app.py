@@ -19,24 +19,254 @@ st.markdown("""
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&family=DM+Sans:wght@300;400;500&display=swap');
 
+/* ── Base & Background ── */
 html, body, [data-testid="stAppViewContainer"] {
     background: #060d1a !important;
 }
 .main {
     background: #060d1a !important;
 }
-
+[data-testid="stAppViewContainer"]::before {
+    content: '';
+    position: fixed;
+    top: -20%;
+    left: -10%;
+    width: 55%;
+    height: 55%;
+    background: radial-gradient(ellipse, rgba(16,185,129,0.07) 0%, transparent 70%);
+    pointer-events: none;
+    z-index: 0;
+}
+[data-testid="stAppViewContainer"]::after {
+    content: '';
+    position: fixed;
+    bottom: -10%;
+    right: -5%;
+    width: 40%;
+    height: 40%;
+    background: radial-gradient(ellipse, rgba(59,130,246,0.06) 0%, transparent 70%);
+    pointer-events: none;
+    z-index: 0;
+}
 .block-container {
     padding-top: 2rem !important;
     padding-bottom: 3rem !important;
     max-width: 1400px !important;
 }
 
+/* ── Tipografia global ── */
 *, h1, h2, h3, h4, p, span, div, label {
     font-family: 'DM Sans', sans-serif !important;
     color: #e2e8f0;
 }
 
+/* ── Header personalizado ── */
+.tt-header {
+    display: flex;
+    align-items: center;
+    gap: 20px;
+    padding: 28px 36px;
+    background: linear-gradient(135deg, #0d1f2d 0%, #0a1628 100%);
+    border: 1px solid rgba(16,185,129,0.18);
+    border-radius: 20px;
+    margin-bottom: 28px;
+    position: relative;
+    overflow: hidden;
+}
+.tt-header::before {
+    content: '';
+    position: absolute;
+    top: 0; left: 0; right: 0;
+    height: 2px;
+    background: linear-gradient(90deg, transparent, #10b981, #3b82f6, transparent);
+}
+.tt-logo-placeholder {
+    width: 56px; height: 56px;
+    background: linear-gradient(135deg, #10b981, #059669);
+    border-radius: 14px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 26px;
+    flex-shrink: 0;
+    box-shadow: 0 0 24px rgba(16,185,129,0.35);
+}
+.tt-brand h1 {
+    font-family: 'Syne', sans-serif !important;
+    font-size: 1.75rem !important;
+    font-weight: 800 !important;
+    letter-spacing: -0.02em;
+    margin: 0 !important; padding: 0 !important;
+    background: linear-gradient(90deg, #ffffff, #a7f3d0);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+    line-height: 1.1 !important;
+}
+.tt-brand p {
+    font-size: 0.82rem;
+    color: #64748b !important;
+    margin: 4px 0 0 0;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    font-weight: 500;
+}
+.tt-badge {
+    margin-left: auto;
+    padding: 6px 14px;
+    background: rgba(16,185,129,0.1);
+    border: 1px solid rgba(16,185,129,0.25);
+    border-radius: 20px;
+    font-size: 0.72rem;
+    color: #10b981 !important;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    font-weight: 600;
+}
+
+/* ── Divider ── */
+hr {
+    border: none !important;
+    border-top: 1px solid rgba(255,255,255,0.06) !important;
+    margin: 1.5rem 0 !important;
+}
+
+/* ── Upload Area ── */
+[data-testid="stFileUploader"] {
+    background: linear-gradient(135deg, #0d1f2d 0%, #091523 100%) !important;
+    border: 1.5px dashed rgba(16,185,129,0.35) !important;
+    border-radius: 18px !important;
+    padding: 8px 16px !important;
+    transition: all 0.3s ease !important;
+    position: relative;
+}
+[data-testid="stFileUploader"]:hover {
+    border-color: rgba(16,185,129,0.75) !important;
+    background: linear-gradient(135deg, #0f2535 0%, #0c1d2e 100%) !important;
+    box-shadow: 0 0 30px rgba(16,185,129,0.08) !important;
+}
+[data-testid="stFileUploaderDropzone"] {
+    background: transparent !important;
+    border: none !important;
+}
+[data-testid="stFileUploaderDropzoneInstructions"] p,
+[data-testid="stFileUploaderDropzoneInstructions"] span {
+    color: #94a3b8 !important;
+    font-size: 0.9rem !important;
+    font-family: 'DM Sans', sans-serif !important;
+}
+[data-testid="stFileUploaderDropzone"] svg {
+    fill: #10b981 !important;
+    opacity: 0.8;
+}
+[data-testid="stFileUploader"] label {
+    font-size: 0.95rem !important;
+    color: #cbd5e1 !important;
+    font-weight: 500 !important;
+}
+
+/* ── Métricas ── */
+[data-testid="metric-container"] {
+    background: linear-gradient(145deg, #0d1f2d, #0a1929) !important;
+    border: 1px solid rgba(255,255,255,0.07) !important;
+    border-radius: 16px !important;
+    padding: 20px 24px !important;
+    position: relative;
+    overflow: hidden;
+    transition: transform 0.2s ease, border-color 0.2s ease;
+}
+[data-testid="metric-container"]:hover {
+    transform: translateY(-2px);
+    border-color: rgba(16,185,129,0.25) !important;
+}
+[data-testid="metric-container"]::before {
+    content: '';
+    position: absolute;
+    top: 0; left: 0; right: 0;
+    height: 2px;
+    background: linear-gradient(90deg, #10b981, #3b82f6);
+    opacity: 0.6;
+}
+[data-testid="stMetricLabel"] {
+    font-size: 0.72rem !important;
+    text-transform: uppercase !important;
+    letter-spacing: 0.1em !important;
+    color: #64748b !important;
+    font-weight: 600 !important;
+}
+[data-testid="stMetricValue"] {
+    font-family: 'Syne', sans-serif !important;
+    font-size: 2rem !important;
+    font-weight: 700 !important;
+    color: #f1f5f9 !important;
+    line-height: 1.2 !important;
+}
+
+/* ── Dataframe ── */
+[data-testid="stDataFrame"] {
+    border: 1px solid rgba(255,255,255,0.07) !important;
+    border-radius: 16px !important;
+    overflow: hidden !important;
+    background: #0a1628 !important;
+}
+[data-testid="stDataFrame"] table {
+    background: transparent !important;
+}
+[data-testid="stDataFrame"] thead th {
+    background: #0d1f2d !important;
+    color: #94a3b8 !important;
+    font-size: 0.72rem !important;
+    text-transform: uppercase !important;
+    letter-spacing: 0.08em !important;
+    border-bottom: 1px solid rgba(255,255,255,0.08) !important;
+    padding: 12px 16px !important;
+}
+[data-testid="stDataFrame"] tbody tr:hover td {
+    background: rgba(16,185,129,0.05) !important;
+}
+
+/* ── Botão de Download ── */
+[data-testid="stDownloadButton"] > button {
+    background: linear-gradient(135deg, #059669 0%, #10b981 100%) !important;
+    color: #fff !important;
+    border: none !important;
+    border-radius: 12px !important;
+    height: 52px !important;
+    font-size: 0.9rem !important;
+    font-weight: 600 !important;
+    letter-spacing: 0.03em !important;
+    width: 100% !important;
+    transition: all 0.25s ease !important;
+    box-shadow: 0 4px 20px rgba(16,185,129,0.25) !important;
+}
+[data-testid="stDownloadButton"] > button:hover {
+    transform: translateY(-2px) !important;
+    box-shadow: 0 8px 28px rgba(16,185,129,0.4) !important;
+    background: linear-gradient(135deg, #047857 0%, #059669 100%) !important;
+}
+
+/* ── Spinner e Progress ── */
+[data-testid="stProgress"] > div > div {
+    background: linear-gradient(90deg, #10b981, #3b82f6) !important;
+    border-radius: 4px !important;
+}
+[data-testid="stProgress"] {
+    background: rgba(255,255,255,0.06) !important;
+    border-radius: 4px !important;
+}
+
+/* ── Alerts / Errors ── */
+[data-testid="stAlert"] {
+    border-radius: 12px !important;
+    border-left: 3px solid #ef4444 !important;
+    background: rgba(239,68,68,0.08) !important;
+}
+
+/* ── Sidebar (se abrir) ── */
+[data-testid="stSidebar"] {
+    background: #060d1a !important;
+    border-right: 1px solid rgba(255,255,255,0.06) !important;
+}
+
+/* ── Seção de resultados ── */
 .tt-section-title {
     font-family: 'Syne', sans-serif !important;
     font-size: 0.72rem;
@@ -46,7 +276,6 @@ html, body, [data-testid="stAppViewContainer"] {
     color: #475569 !important;
     margin: 8px 0 16px 2px;
 }
-
 .tt-divider {
     height: 1px;
     background: linear-gradient(90deg, rgba(16,185,129,0.3), rgba(59,130,246,0.15), transparent);
@@ -57,16 +286,34 @@ html, body, [data-testid="stAppViewContainer"] {
 """, unsafe_allow_html=True)
 
 # ===== HEADER =====
-st.markdown("""
-<div class="tt-header">
-    <div class="tt-logo-placeholder">📡</div>
-    <div class="tt-brand">
-        <h1>TARGET TELECOM</h1>
-        <p>Inteligência em Faturas Corporativas</p>
+if os.path.exists("logo.png"):
+    col1, col2 = st.columns([1, 5])
+    with col1:
+        st.image("logo.png", width=180)
+    with col2:
+        st.markdown("""
+        <div style="padding: 12px 0;">
+            <div style="font-family:'Syne',sans-serif;font-size:1.6rem;font-weight:800;
+                        background:linear-gradient(90deg,#fff,#a7f3d0);
+                        -webkit-background-clip:text;-webkit-text-fill-color:transparent;
+                        background-clip:text;letter-spacing:-0.02em;">TARGET TELECOM</div>
+            <div style="font-size:0.78rem;color:#64748b;text-transform:uppercase;
+                        letter-spacing:0.1em;font-weight:500;margin-top:4px;">
+                Inteligência em Faturas Corporativas
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+else:
+    st.markdown("""
+    <div class="tt-header">
+        <div class="tt-logo-placeholder">📡</div>
+        <div class="tt-brand">
+            <h1>TARGET TELECOM</h1>
+            <p>Inteligência em Faturas Corporativas</p>
+        </div>
+        <div class="tt-badge">✦ Análise Automática</div>
     </div>
-    <div class="tt-badge">✦ Análise Automática</div>
-</div>
-""", unsafe_allow_html=True)
+    """, unsafe_allow_html=True)
 
 st.markdown('<div class="tt-divider"></div>', unsafe_allow_html=True)
 
@@ -77,14 +324,20 @@ uploaded_files = st.file_uploader(
     "Arraste o PDF da fatura ou clique para selecionar — múltiplos arquivos suportados",
     type="pdf",
     accept_multiple_files=True,
+    label_visibility="visible"
 )
 
-# ===== FUNÇÕES (BASE INTACTA) =====
+# ===== UTILITÁRIOS =====
 
 def normalizar_numero(num_str: str) -> str:
+    """Remove parênteses e espaços do número de telefone."""
     return num_str.replace("(", "").replace(")", "").replace(" ", "")
 
 def extrair_blocos_por_linha(texto: str) -> dict:
+    """
+    FIX #10 (DRY): centraliza o split e busca de número.
+    Retorna {numero_sem_formatacao: bloco_texto}.
+    """
     blocos = re.split(r"DETALHAMENTO DE LIGAÇÕES E SERVIÇOS DO CELULAR", texto)
     resultado = {}
     for bloco in blocos:
@@ -106,9 +359,11 @@ def extrair_cliente(texto: str) -> str:
     return "CLIENTE"
 
 def extrair_vencimento(texto: str) -> str:
+    # FIX #5: usa re.DOTALL para capturar mesmo com quebra de linha
     match = re.search(r"Nº da conta:.*?(\d{2}/\d{2}/\d{4})", texto, re.DOTALL)
     if match:
         return match.group(1)
+    # fallback: busca a data de vencimento diretamente
     match = re.search(r"Vencimento\s*\n\s*(\d{2}/\d{2}/\d{4})", texto)
     if match:
         return match.group(1)
@@ -124,11 +379,18 @@ def extrair_linhas(texto: str) -> list:
     return lista
 
 def extrair_mensalidades(blocos: dict) -> dict:
+    """
+    Captura o TOTAL de cada linha.
+    Usa TOTAL R$(...) do bloco — mas se houver desconto negativo que reduziu
+    o total incorretamente, soma apenas os valores positivos da seção.
+    """
     mapa = {}
     for linha, bloco in blocos.items():
+        # Regex sem espaço obrigatório entre R$ e valor (formato do PDF: "TOTAL R$59,15")
         total_m = re.search(r"TOTAL\s*R\$\s*([\d\.,]+)", bloco)
         total_pdf = float(total_m.group(1).replace(".", "").replace(",", ".")) if total_m else 0.0
 
+        # Somar valores positivos da seção de mensalidades
         secao = re.search(r"Mensalidades e Pacotes Promocionais(.*?)TOTAL\s*R\$", bloco, re.DOTALL)
         soma_positivos = 0.0
         if secao:
@@ -139,9 +401,10 @@ def extrair_mensalidades(blocos: dict) -> dict:
                         val = float(m.group(1).replace(".", "").replace(",", "."))
                         if val > 0:
                             soma_positivos += val
-                    except:
+                    except (ValueError, TypeError):
                         pass
 
+        # Se descontos negativos reduziram o total, usa soma dos positivos
         if soma_positivos > total_pdf + 0.01:
             mapa[linha] = f"{soma_positivos:.2f}".replace(".", ",")
         elif total_m:
@@ -156,6 +419,7 @@ def extrair_pacote_e_passaporte(blocos: dict) -> dict:
         passaporte = "-"
         valor_passaporte = "0"
 
+        # FIX #5 (pacote): captura todos os planos possíveis da Claro
         m = re.search(
             r"(Claro\s+(?:Pós|Life Ilimitado|Controle)\s+\d+\s*GB)",
             bloco
@@ -163,16 +427,20 @@ def extrair_pacote_e_passaporte(blocos: dict) -> dict:
         if m:
             pacote = m.group(1).strip()
 
+        # Busca seção de mensalidades e pacotes
         secao = re.search(
             r"Mensalidades e Pacotes Promocionais(.*?)TOTAL\s+R\$",
             bloco,
             re.DOTALL
         )
         if secao:
-            for linha_bloco in secao.group(1).split("\n"):
-                if "Claro Passaporte" not in linha_bloco:
+            trecho = secao.group(1)
+            for linha_bloco in trecho.split("\n"):
+                linha_limpa = linha_bloco.strip()
+                if "Claro Passaporte" not in linha_limpa:
                     continue
-                m = re.search(r"(Claro Passaporte.*?GB).*?([\d]+,\d{2})$", linha_bloco.strip())
+                # Captura nome do passaporte e valor no final da linha
+                m = re.search(r"(Claro Passaporte.*?GB).*?([\d]+,\d{2})$", linha_limpa)
                 if m:
                     passaporte = m.group(1).strip()
                     valor_passaporte = m.group(2).strip()
@@ -188,6 +456,8 @@ def extrair_pacote_e_passaporte(blocos: dict) -> dict:
 def extrair_detalhamento(blocos: dict) -> dict:
     mapa = {}
     for linha, bloco in blocos.items():
+        # FIX Internet: pega apenas a linha "Internet X" da seção Serviços local,
+        # sem incluir "Internet - meses anteriores", evitando multi-Subtotal do roaming.
         internet = "0"
         m = re.search(
             r"Serviços \(Torpedos.*?^Internet\s+([\d\.,]+)\s+0,00",
@@ -196,6 +466,7 @@ def extrair_detalhamento(blocos: dict) -> dict:
         if m:
             internet = m.group(1)
 
+        # Minutos: busca o TOTAL no formato "Xmin Ys", "Xmin" ou "Xs"
         minutos = "0"
         m = re.search(r"TOTAL\s+([\d]+min[\d]*s?|[\d]+s)", bloco)
         if m:
@@ -208,9 +479,10 @@ def extrair_detalhamento(blocos: dict) -> dict:
     return mapa
 
 def to_float(valor) -> float:
+    # FIX #2: except específico
     try:
         return float(str(valor).replace(".", "").replace(",", "."))
-    except:
+    except (ValueError, TypeError):
         return 0.0
 
 def extrair_gb_pacote(pacote: str) -> int:
@@ -224,7 +496,7 @@ def processar_pdf(file):
         total_paginas = len(pdf.pages)
         progresso = st.progress(0)
         for i, page in enumerate(pdf.pages):
-            placeholder.markdown(f"### 📄 Processando página {i+1} de {total_paginas}")
+            placeholder.text(f"📄 Processando página {i+1} de {total_paginas}")
             t = page.extract_text()
             if t:
                 texto += t + "\n"
@@ -235,12 +507,14 @@ def processar_pdf(file):
     vencimento = extrair_vencimento(texto)
     linhas = extrair_linhas(texto)
 
+    # FIX #10: blocos extraídos uma única vez
     blocos = extrair_blocos_por_linha(texto)
 
     mensalidades = extrair_mensalidades(blocos)
     detalhamento = extrair_detalhamento(blocos)
     pacotes = extrair_pacote_e_passaporte(blocos)
 
+    # Limpa os elementos de progresso
     progresso.empty()
     placeholder.empty()
 
@@ -318,19 +592,81 @@ def gerar_excel(df: pd.DataFrame) -> io.BytesIO:
     ws = wb.active
     ws.title = "Detalhamento"
 
+    # FIX #12: reset_index com ignore_index
     df_reset = df.reset_index(drop=True)
 
     for r in dataframe_to_rows(df_reset, index=False, header=True):
         ws.append(r)
 
-    borda = Border(left=Side(style='thin'), right=Side(style='thin'),
-                   top=Side(style='thin'), bottom=Side(style='thin'))
+    borda = Border(
+        left=Side(style='thin'), right=Side(style='thin'),
+        top=Side(style='thin'), bottom=Side(style='thin')
+    )
+    header_fill = PatternFill(start_color="333333", fill_type="solid")
+    zebra       = PatternFill(start_color="F2F2F2", fill_type="solid")
+    vermelho    = PatternFill(start_color="FF4C4C", fill_type="solid")
+    verde       = PatternFill(start_color="C6EFCE", fill_type="solid")
+    amarelo     = PatternFill(start_color="FFF3B0", fill_type="solid")
+    azul        = PatternFill(start_color="BDD7EE", fill_type="solid")
+    cinza       = PatternFill(start_color="D9D9D9", fill_type="solid")
+
+    # FIX #1: índices por nome de coluna, não posição hardcoded
+    headers = [cell.value for cell in ws[1]]
+    col_idx = {v: i for i, v in enumerate(headers)}
 
     for cell in ws[1]:
         cell.font = Font(bold=True, color="FFFFFF")
-        cell.fill = PatternFill(start_color="333333", fill_type="solid")
-        cell.alignment = Alignment(horizontal="center")
+        cell.fill = header_fill
+        cell.alignment = Alignment(horizontal="center", vertical="center")
         cell.border = borda
+
+    for i, row in enumerate(ws.iter_rows(min_row=2), start=2):
+        for j, cell in enumerate(row):
+            coluna = headers[j]
+            if coluna in ("Perfil", "Estratégia Comercial"):
+                cell.alignment = Alignment(horizontal="left", vertical="center")
+            elif coluna == "Minutos":
+                cell.alignment = Alignment(horizontal="center", vertical="center")
+            else:
+                cell.alignment = Alignment(horizontal="center", vertical="center")
+            cell.border = borda
+
+        if i % 2 == 0:
+            for cell in row:
+                cell.fill = zebra
+
+        # FIX #1: usa índice por nome
+        perfil     = str(row[col_idx["Perfil"]].value) if "Perfil" in col_idx else ""
+        uso        = str(row[col_idx["Em Uso"]].value) if "Em Uso" in col_idx else ""
+        estrategia = str(row[col_idx["Estratégia Comercial"]].value) if "Estratégia Comercial" in col_idx else ""
+
+        if "Alto" in perfil:
+            row[col_idx["Perfil"]].fill = vermelho
+        elif "Médio" in perfil:
+            row[col_idx["Perfil"]].fill = amarelo
+
+        if "Em Uso" in col_idx:
+            if uso == "Não":
+                row[col_idx["Em Uso"]].fill = vermelho
+            else:
+                row[col_idx["Em Uso"]].fill = verde
+
+        if "Estratégia Comercial" in col_idx:
+            if "Manter" in estrategia:
+                row[col_idx["Estratégia Comercial"]].fill = cinza
+            elif "Sustentar" in estrategia:
+                row[col_idx["Estratégia Comercial"]].fill = amarelo
+            elif "Bem dimensionado" in estrategia:
+                row[col_idx["Estratégia Comercial"]].fill = verde
+            elif "Upsell" in estrategia:
+                row[col_idx["Estratégia Comercial"]].fill = azul
+
+    for col in ws.columns:
+        max_length = max((len(str(cell.value)) for cell in col if cell.value), default=10)
+        ws.column_dimensions[col[0].column_letter].width = max_length + 3
+
+    ws.freeze_panes = "A2"
+    ws.auto_filter.ref = ws.dimensions
 
     buffer = io.BytesIO()
     wb.save(buffer)
@@ -343,55 +679,79 @@ if uploaded_files:
     cliente_nome = "CLIENTE"
     vencimento_fatura = ""
 
-    for file in uploaded_files:
-        df, cliente, vencimento = processar_pdf(file)
-        df_total = pd.concat([df_total, df], ignore_index=True)
-        cliente_nome = cliente
-        vencimento_fatura = vencimento
+    progress = st.progress(0)
+    total_files = len(uploaded_files)
+
+    for i, file in enumerate(uploaded_files):
+        # FIX #11: tratamento de erro no processamento
+        try:
+            with st.spinner(f"Processando {file.name}..."):
+                df, cliente, vencimento = processar_pdf(file)
+                # FIX #12: ignore_index=True no concat
+                df_total = pd.concat([df_total, df], ignore_index=True)
+                cliente_nome = cliente
+                vencimento_fatura = vencimento
+        except Exception as e:
+            st.error(f"❌ Erro ao processar **{file.name}**: {e}")
+            continue
+
+        progress.progress((i + 1) / total_files)
 
     if not df_total.empty:
-
+        st.markdown('<div class="tt-divider"></div>', unsafe_allow_html=True)
         st.markdown('<p class="tt-section-title">📊 Resumo da Fatura</p>', unsafe_allow_html=True)
 
         col1, col2, col3, col4 = st.columns(4)
-
         total_linhas = len(df_total)
-        em_uso = (df_total["Em Uso"] == "Sim").sum()
-        total_gb = df_total["Internet (MB)"].sum() / 1024
-        media_gb = total_gb / total_linhas if total_linhas else 0
+        em_uso       = (df_total["Em Uso"] == "Sim").sum()
+        inativas     = total_linhas - em_uso
+        total_gb     = df_total["Internet (MB)"].sum() / 1024
+        media_gb     = total_gb / total_linhas if total_linhas else 0
 
         col1.metric("Total de Linhas", total_linhas)
-        col2.metric("Linhas em Uso", em_uso)
-        col3.metric("Consumo Total de Dados", f"{round(total_gb,1)} GB")
-        col4.metric("Consumo Médio por Linha", f"{round(media_gb,1)} GB")
+        col2.metric("Linhas Ativas", em_uso, delta=f"{inativas} inativas" if inativas else None,
+                    delta_color="inverse")
+        col3.metric("Consumo Total", f"{round(total_gb, 1)} GB")
+        col4.metric("Média por Linha", f"{round(media_gb, 1)} GB")
 
-        # ===== INSIGHTS =====
-        st.markdown('<p class="tt-section-title">🧠 Insights Automáticos</p>', unsafe_allow_html=True)
+        st.markdown('<div class="tt-divider"></div>', unsafe_allow_html=True)
+        st.markdown('<p class="tt-section-title">📋 Detalhamento por Linha</p>', unsafe_allow_html=True)
 
-        upsell = (df_total["Estratégia Comercial"].str.contains("Upsell")).sum()
-        ociosidade = (df_total["Em Uso"] == "Não").sum()
-
-        col_i1, col_i2 = st.columns(2)
-
-        col_i1.metric("Upsell", upsell)
-        col_i2.metric("Linhas sem uso", ociosidade)
-
-        st.markdown(f"""
-        <div style="padding:14px;border-radius:12px;
-                    background:rgba(16,185,129,0.08);
-                    border:1px solid rgba(16,185,129,0.25);">
-            <strong style="color:#10b981;">Resumo executivo:</strong>
-            {upsell} oportunidades de upgrade e {ociosidade} linhas com possível economia.
-        </div>
-        """, unsafe_allow_html=True)
-
-        st.markdown('<p class="tt-section-title">📋 Detalhamento</p>', unsafe_allow_html=True)
-        st.dataframe(df_total, use_container_width=True)
-
-        excel = gerar_excel(df_total)
-
-        st.download_button(
-            "📥 Baixar Excel",
-            data=excel,
-            file_name="analise.xlsx"
+        st.dataframe(
+            df_total,
+            use_container_width=True,
+            height=min(600, 60 + len(df_total) * 38),
+            hide_index=True,
         )
+
+        st.markdown('<div class="tt-divider"></div>', unsafe_allow_html=True)
+
+        col_info, col_btn = st.columns([3, 1])
+        with col_info:
+            st.markdown(f"""
+            <div style="padding:14px 18px;background:rgba(16,185,129,0.06);
+                        border:1px solid rgba(16,185,129,0.15);border-radius:12px;">
+                <div style="font-size:0.72rem;color:#64748b;text-transform:uppercase;
+                            letter-spacing:0.08em;font-weight:600;margin-bottom:4px;">
+                    Relatório pronto
+                </div>
+                <div style="font-size:0.9rem;color:#cbd5e1;">
+                    <strong style="color:#10b981;">{total_linhas}</strong> linhas ·
+                    cliente <strong style="color:#e2e8f0;">{cliente_nome}</strong> ·
+                    vencimento <strong style="color:#e2e8f0;">{vencimento_fatura or '—'}</strong>
+                </div>
+            </div>
+            """, unsafe_allow_html=True)
+        with col_btn:
+            excel = gerar_excel(df_total)
+            nome_arquivo = (
+                f"Analise_Target_{cliente_nome}_{vencimento_fatura}.xlsx"
+                if vencimento_fatura
+                else f"Analise_Target_{cliente_nome}.xlsx"
+            )
+            st.download_button(
+                "📥  Baixar Relatório Excel",
+                data=excel,
+                file_name=nome_arquivo,
+                use_container_width=True,
+            )
