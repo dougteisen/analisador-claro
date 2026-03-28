@@ -110,12 +110,37 @@ def extrair_linhas(texto: str) -> list:
     return lista
 
 def extrair_mensalidades(blocos: dict) -> dict:
-    """FIX #10: usa blocos já separados."""
+    """
+    Captura o TOTAL de cada linha.
+    Usa TOTAL R$(...) do bloco — mas se houver desconto negativo que reduziu
+    o total incorretamente, soma apenas os valores positivos da seção.
+    """
     mapa = {}
     for linha, bloco in blocos.items():
-        total = re.search(r"TOTAL\s+R\$\s*([\d\.,]+)", bloco)
-        if total:
-            mapa[linha] = total.group(1)
+        # Regex sem espaço obrigatório entre R$ e valor (formato do PDF: "TOTAL R$59,15")
+        total_m = re.search(r"TOTAL\s*R\$\s*([\d\.,]+)", bloco)
+        total_pdf = float(total_m.group(1).replace(".", "").replace(",", ".")) if total_m else 0.0
+
+        # Somar valores positivos da seção de mensalidades
+        secao = re.search(r"Mensalidades e Pacotes Promocionais(.*?)TOTAL\s*R\$", bloco, re.DOTALL)
+        soma_positivos = 0.0
+        if secao:
+            for lb in secao.group(1).split("\n"):
+                m = re.search(r"(-?[\d]+,\d{2})$", lb.strip())
+                if m:
+                    try:
+                        val = float(m.group(1).replace(".", "").replace(",", "."))
+                        if val > 0:
+                            soma_positivos += val
+                    except (ValueError, TypeError):
+                        pass
+
+        # Se descontos negativos reduziram o total, usa soma dos positivos
+        if soma_positivos > total_pdf + 0.01:
+            mapa[linha] = f"{soma_positivos:.2f}".replace(".", ",")
+        elif total_m:
+            mapa[linha] = total_m.group(1)
+
     return mapa
 
 def extrair_pacote_e_passaporte(blocos: dict) -> dict:
@@ -162,18 +187,17 @@ def extrair_pacote_e_passaporte(blocos: dict) -> dict:
 def extrair_detalhamento(blocos: dict) -> dict:
     mapa = {}
     for linha, bloco in blocos.items():
+        # FIX Internet: pega apenas a linha "Internet X" da seção Serviços local,
+        # sem incluir "Internet - meses anteriores", evitando multi-Subtotal do roaming.
         internet = "0"
-        # FIX #4: busca o Subtotal da seção de Internet, mais confiável
-        m = re.search(r"Subtotal\s+([\d\.,]+)\s+0,00", bloco)
+        m = re.search(
+            r"Serviços \(Torpedos.*?^Internet\s+([\d\.,]+)\s+0,00",
+            bloco, re.DOTALL | re.MULTILINE
+        )
         if m:
             internet = m.group(1)
-        else:
-            # fallback: busca linha "Internet  X.XXX,XXX"
-            m = re.search(r"^Internet\s+([\d\.,]+)", bloco, re.MULTILINE | re.IGNORECASE)
-            if m:
-                internet = m.group(1)
 
-        # FIX minutos: busca o TOTAL no formato "Xmin Ys" ou "Xmin" no final do bloco
+        # Minutos: busca o TOTAL no formato "Xmin Ys", "Xmin" ou "Xs"
         minutos = "0"
         m = re.search(r"TOTAL\s+([\d]+min[\d]*s?|[\d]+s)", bloco)
         if m:
