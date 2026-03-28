@@ -146,7 +146,7 @@ def extrair_pacote_e_passaporte(blocos: dict) -> dict:
                 if "Claro Passaporte" not in linha_limpa:
                     continue
                 # Captura nome do passaporte e valor no final da linha
-                m = re.search(r"(Claro Passaporte[^\d\n]+?)\s+([\d]+,\d{2})$", linha_limpa)
+                m = re.search(r"(Claro Passaporte.*?GB).*?([\d]+,\d{2})$", linha_limpa)
                 if m:
                     passaporte = m.group(1).strip()
                     valor_passaporte = m.group(2).strip()
