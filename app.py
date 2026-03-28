@@ -49,14 +49,37 @@ with col2:
 st.markdown("---")
 
 st.markdown("""
-<div class="upload-box">
-    <div class="upload-icon">📎</div>
-    <h3>Arraste sua fatura ou clique para enviar</h3>
-    <p>PDF • Seguro • Processamento automático</p>
-</div>
+<style>
+/* Estiliza a área de upload nativa do Streamlit */
+[data-testid="stFileUploader"] {
+    border: 2px dashed #334155;
+    border-radius: 16px;
+    background: #020617;
+    padding: 10px;
+    transition: 0.3s;
+}
+[data-testid="stFileUploader"]:hover {
+    border-color: #22c55e;
+}
+[data-testid="stFileUploaderDropzone"] {
+    background: transparent !important;
+}
+[data-testid="stFileUploaderDropzoneInstructions"] p,
+[data-testid="stFileUploaderDropzoneInstructions"] span {
+    color: white !important;
+    font-size: 1rem;
+}
+[data-testid="stFileUploaderDropzone"] svg {
+    fill: white;
+}
+</style>
 """, unsafe_allow_html=True)
 
-uploaded_files = st.file_uploader("", type="pdf", accept_multiple_files=True)
+uploaded_files = st.file_uploader(
+    "📎  Arraste sua fatura ou clique para enviar — PDF • Seguro • Processamento automático",
+    type="pdf",
+    accept_multiple_files=True
+)
 
 # ===== UTILITÁRIOS =====
 
