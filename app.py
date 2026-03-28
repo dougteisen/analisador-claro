@@ -3,89 +3,51 @@ import pdfplumber
 import pandas as pd
 import io
 import re
+import os
 from openpyxl import Workbook
 from openpyxl.utils.dataframe import dataframe_to_rows
 from openpyxl.styles import Alignment, PatternFill, Font, Border, Side
 
 st.set_page_config(layout="wide")
 
-# ===== CSS SaaS PROFISSIONAL =====
+# ===== CSS =====
 st.markdown("""
 <style>
-
-.main {
-    background: linear-gradient(180deg, #0f172a 0%, #020617 100%);
-}
-
-h1, h2, h3 {
-    color: white;
-}
-
-.block-container {
-    padding-top: 1.5rem;
-}
-
+.main { background: linear-gradient(180deg, #0f172a 0%, #020617 100%); }
+h1, h2, h3 { color: white; }
+.block-container { padding-top: 1.5rem; }
 .upload-box {
-    border: 2px dashed #334155;
-    border-radius: 16px;
-    padding: 40px;
-    text-align: center;
-    background: #020617;
-    transition: 0.3s;
+    border: 2px dashed #334155; border-radius: 16px; padding: 40px;
+    text-align: center; background: #020617; transition: 0.3s;
 }
-
-.upload-box:hover {
-    border-color: #22c55e;
-    transform: scale(1.01);
-}
-
-.upload-icon {
-    font-size: 50px;
-    animation: pulse 2s infinite;
-}
-
-@keyframes pulse {
-    0% {opacity: 0.5;}
-    50% {opacity: 1;}
-    100% {opacity: 0.5;}
-}
-
+.upload-box:hover { border-color: #22c55e; transform: scale(1.01); }
+.upload-icon { font-size: 50px; animation: pulse 2s infinite; }
+@keyframes pulse { 0%{opacity:0.5;} 50%{opacity:1;} 100%{opacity:0.5;} }
 .stMetric {
     background: linear-gradient(145deg, #111827, #1f2937);
-    padding: 18px;
-    border-radius: 14px;
-    box-shadow: 0px 4px 20px rgba(0,0,0,0.4);
+    padding: 18px; border-radius: 14px; box-shadow: 0px 4px 20px rgba(0,0,0,0.4);
 }
-
 .stDownloadButton>button {
     background: linear-gradient(90deg, #16a34a, #22c55e);
-    color: white;
-    border-radius: 12px;
-    height: 55px;
-    font-weight: bold;
-    transition: 0.3s;
+    color: white; border-radius: 12px; height: 55px; font-weight: bold; transition: 0.3s;
 }
-
-.stDownloadButton>button:hover {
-    transform: scale(1.05);
-}
-
+.stDownloadButton>button:hover { transform: scale(1.05); }
 </style>
 """, unsafe_allow_html=True)
 
 # ===== HEADER =====
 col1, col2 = st.columns([2, 4])
-
 with col1:
-    st.image("logo.png", width=240)
-
+    if os.path.exists("logo.png"):
+        st.image("logo.png", width=240)
+    else:
+        st.markdown("## 🎯")
 with col2:
     st.markdown("# TARGET TELECOM")
     st.markdown("### Inteligência em Faturas Corporativas")
 
 st.markdown("---")
 
-# ===== UPLOAD =====
 st.markdown("""
 <div class="upload-box">
     <div class="upload-icon">📎</div>
@@ -96,9 +58,27 @@ st.markdown("""
 
 uploaded_files = st.file_uploader("", type="pdf", accept_multiple_files=True)
 
-# ===== BASE =====
+# ===== UTILITÁRIOS =====
 
-def extrair_cliente(texto):
+def normalizar_numero(num_str: str) -> str:
+    """Remove parênteses e espaços do número de telefone."""
+    return num_str.replace("(", "").replace(")", "").replace(" ", "")
+
+def extrair_blocos_por_linha(texto: str) -> dict:
+    """
+    FIX #10 (DRY): centraliza o split e busca de número.
+    Retorna {numero_sem_formatacao: bloco_texto}.
+    """
+    blocos = re.split(r"DETALHAMENTO DE LIGAÇÕES E SERVIÇOS DO CELULAR", texto)
+    resultado = {}
+    for bloco in blocos:
+        num = re.search(r"\(\d{2}\)\s\d{5}\s\d{4}", bloco)
+        if num:
+            chave = normalizar_numero(num.group(0))
+            resultado[chave] = bloco
+    return resultado
+
+def extrair_cliente(texto: str) -> str:
     linhas = texto.split("\n")
     for i, linha in enumerate(linhas):
         if "nº do cliente" in linha.lower():
@@ -109,63 +89,64 @@ def extrair_cliente(texto):
                 return nome
     return "CLIENTE"
 
-def extrair_vencimento(texto):
-    match = re.search(r"Nº da conta:.*?(\d{2}/\d{2}/\d{4})", texto)
+def extrair_vencimento(texto: str) -> str:
+    # FIX #5: usa re.DOTALL para capturar mesmo com quebra de linha
+    match = re.search(r"Nº da conta:.*?(\d{2}/\d{2}/\d{4})", texto, re.DOTALL)
+    if match:
+        return match.group(1)
+    # fallback: busca a data de vencimento diretamente
+    match = re.search(r"Vencimento\s*\n\s*(\d{2}/\d{2}/\d{4})", texto)
     if match:
         return match.group(1)
     return ""
 
-def extrair_mensalidades(texto):
-    blocos = re.split(r"DETALHAMENTO DE LIGAÇÕES E SERVIÇOS DO CELULAR", texto)
+def extrair_linhas(texto: str) -> list:
+    linhas = re.findall(r"\(\d{2}\)\s\d{5}\s\d{4}", texto)
+    lista = []
+    for l in linhas:
+        num = normalizar_numero(l)
+        if num not in lista:
+            lista.append(num)
+    return lista
+
+def extrair_mensalidades(blocos: dict) -> dict:
+    """FIX #10: usa blocos já separados."""
     mapa = {}
-    for bloco in blocos:
-        num = re.search(r"\(\d{2}\)\s\d{5}\s\d{4}", bloco)
-        if not num:
-            continue
-        linha = num.group(0).replace("(", "").replace(")", "").replace(" ", "")
-        total = re.search(r"TOTAL\s*R\$\s*([\d\.,]+)", bloco)
+    for linha, bloco in blocos.items():
+        total = re.search(r"TOTAL\s+R\$\s*([\d\.,]+)", bloco)
         if total:
             mapa[linha] = total.group(1)
     return mapa
 
-# ===== CORREÇÃO AQUI =====
-def extrair_pacote_e_passaporte(texto):
-    blocos = re.split(r"DETALHAMENTO DE LIGAÇÕES E SERVIÇOS DO CELULAR", texto)
+def extrair_pacote_e_passaporte(blocos: dict) -> dict:
     resultado = {}
-
-    for bloco in blocos:
-        num = re.search(r"\(\d{2}\)\s\d{5}\s\d{4}", bloco)
-        if not num:
-            continue
-
-        linha = num.group(0).replace("(", "").replace(")", "").replace(" ", "")
-
+    for linha, bloco in blocos.items():
         pacote = "-"
         passaporte = "-"
         valor_passaporte = "0"
 
-        m = re.search(r"(Claro (Pós|Life Ilimitado)\s*\d+GB)", bloco)
+        # FIX #5 (pacote): captura todos os planos possíveis da Claro
+        m = re.search(
+            r"(Claro\s+(?:Pós|Life Ilimitado|Controle)\s+\d+\s*GB)",
+            bloco
+        )
         if m:
-            pacote = m.group(1)
+            pacote = m.group(1).strip()
 
-        # ===== NOVA LÓGICA SEGURA =====
+        # Busca seção de mensalidades e pacotes
         secao = re.search(
             r"Mensalidades e Pacotes Promocionais(.*?)TOTAL\s+R\$",
             bloco,
             re.DOTALL
         )
-
         if secao:
             trecho = secao.group(1)
-
             for linha_bloco in trecho.split("\n"):
                 linha_limpa = linha_bloco.strip()
-
                 if "Claro Passaporte" not in linha_limpa:
                     continue
-
-                m = re.search(r"(Claro Passaporte.*?GB).*?([\d]+,\d{2})$", linha_limpa)
-
+                # Captura nome do passaporte e valor no final da linha
+                m = re.search(r"(Claro Passaporte[^\d\n]+?)\s+([\d]+,\d{2})$", linha_limpa)
                 if m:
                     passaporte = m.group(1).strip()
                     valor_passaporte = m.group(2).strip()
@@ -176,35 +157,25 @@ def extrair_pacote_e_passaporte(texto):
             "Passaporte": passaporte,
             "Valor Passaporte": valor_passaporte
         }
-
     return resultado
 
-def extrair_detalhamento(texto):
-    blocos = re.split(r"DETALHAMENTO DE LIGAÇÕES E SERVIÇOS DO CELULAR", texto)
+def extrair_detalhamento(blocos: dict) -> dict:
     mapa = {}
-
-    for bloco in blocos:
-        num = re.search(r"\(\d{2}\)\s\d{5}\s\d{4}", bloco)
-        if not num:
-            continue
-
-        linha = num.group(0).replace("(", "").replace(")", "").replace(" ", "")
-
+    for linha, bloco in blocos.items():
         internet = "0"
-
-        m = re.search(r"Internet\s+([\d\.,]+)", bloco, re.IGNORECASE)
-        if not m:
-            m = re.search(r"Internet.*?([\d\.,]+)", bloco, re.IGNORECASE)
-
+        # FIX #4: busca o Subtotal da seção de Internet, mais confiável
+        m = re.search(r"Subtotal\s+([\d\.,]+)\s+0,00", bloco)
         if m:
             internet = m.group(1)
         else:
-            m = re.search(r"Subtotal\s([\d\.,]+)", bloco)
+            # fallback: busca linha "Internet  X.XXX,XXX"
+            m = re.search(r"^Internet\s+([\d\.,]+)", bloco, re.MULTILINE | re.IGNORECASE)
             if m:
                 internet = m.group(1)
 
+        # FIX minutos: busca o TOTAL no formato "Xmin Ys" ou "Xmin" no final do bloco
         minutos = "0"
-        m = re.search(r"TOTAL\s([\dminseg:s]+)", bloco)
+        m = re.search(r"TOTAL\s+([\d]+min[\d]*s?|[\d]+s)", bloco)
         if m:
             minutos = m.group(1)
 
@@ -212,57 +183,49 @@ def extrair_detalhamento(texto):
             "Internet (MB)": internet,
             "Minutos": minutos
         }
-
     return mapa
 
-def extrair_linhas(texto):
-    linhas = re.findall(r"\(\d{2}\)\s\d{5}\s\d{4}", texto)
-    lista = []
-    for l in linhas:
-        num = l.replace("(", "").replace(")", "").replace(" ", "")
-        if num not in lista:
-            lista.append(num)
-    return lista
-
-def to_float(valor):
-    valor = str(valor).replace(".", "").replace(",", ".")
+def to_float(valor) -> float:
+    # FIX #2: except específico
     try:
-        return float(valor)
-    except:
-        return 0
+        return float(str(valor).replace(".", "").replace(",", "."))
+    except (ValueError, TypeError):
+        return 0.0
 
-def extrair_gb_pacote(pacote):
+def extrair_gb_pacote(pacote: str) -> int:
     m = re.search(r"(\d+)\s*GB", str(pacote))
-    if m:
-        return int(m.group(1))
-    return 0
+    return int(m.group(1)) if m else 0
 
 def processar_pdf(file):
     texto = ""
-
+    placeholder = st.empty()
     with pdfplumber.open(file) as pdf:
         total_paginas = len(pdf.pages)
         progresso = st.progress(0)
-        status = st.empty()
-
         for i, page in enumerate(pdf.pages):
-            status.text(f"📄 Processando página {i+1} de {total_paginas}")
+            placeholder.text(f"📄 Processando página {i+1} de {total_paginas}")
             t = page.extract_text()
             if t:
                 texto += t + "\n"
             progresso.progress((i + 1) / total_paginas)
-
-        status.text("🔍 Extraindo dados...")
+        placeholder.text("🔍 Extraindo dados...")
 
     cliente = extrair_cliente(texto)
     vencimento = extrair_vencimento(texto)
     linhas = extrair_linhas(texto)
-    mensalidades = extrair_mensalidades(texto)
-    detalhamento = extrair_detalhamento(texto)
-    pacotes = extrair_pacote_e_passaporte(texto)
+
+    # FIX #10: blocos extraídos uma única vez
+    blocos = extrair_blocos_por_linha(texto)
+
+    mensalidades = extrair_mensalidades(blocos)
+    detalhamento = extrair_detalhamento(blocos)
+    pacotes = extrair_pacote_e_passaporte(blocos)
+
+    # Limpa os elementos de progresso
+    progresso.empty()
+    placeholder.empty()
 
     dados = []
-
     for linha in linhas:
         total = to_float(mensalidades.get(linha, "0"))
         valor_passaporte = to_float(pacotes.get(linha, {}).get("Valor Passaporte", "0"))
@@ -300,8 +263,9 @@ def processar_pdf(file):
     df["Perfil"] = df["Internet (MB)"].apply(classificar)
 
     def em_uso(row):
-        minutos = str(row["Minutos"]).lower()
-        if row["Internet (MB)"] == 0 and minutos in ["0", "", "0min", "0:00", "0seg"]:
+        minutos_str = str(row["Minutos"]).strip().lower()
+        sem_minutos = re.fullmatch(r"0[^\d]*|", minutos_str) is not None
+        if row["Internet (MB)"] == 0 and sem_minutos:
             return "Não"
         return "Sim"
 
@@ -330,29 +294,32 @@ def processar_pdf(file):
 
     return df, cliente, vencimento
 
-def gerar_excel(df):
+def gerar_excel(df: pd.DataFrame) -> io.BytesIO:
     wb = Workbook()
     ws = wb.active
     ws.title = "Detalhamento"
 
+    # FIX #12: reset_index com ignore_index
     df_reset = df.reset_index(drop=True)
 
     for r in dataframe_to_rows(df_reset, index=False, header=True):
         ws.append(r)
 
-    borda = Border(left=Side(style='thin'), right=Side(style='thin'),
-                   top=Side(style='thin'), bottom=Side(style='thin'))
-
+    borda = Border(
+        left=Side(style='thin'), right=Side(style='thin'),
+        top=Side(style='thin'), bottom=Side(style='thin')
+    )
     header_fill = PatternFill(start_color="333333", fill_type="solid")
-    zebra = PatternFill(start_color="F2F2F2", fill_type="solid")
+    zebra       = PatternFill(start_color="F2F2F2", fill_type="solid")
+    vermelho    = PatternFill(start_color="FF4C4C", fill_type="solid")
+    verde       = PatternFill(start_color="C6EFCE", fill_type="solid")
+    amarelo     = PatternFill(start_color="FFF3B0", fill_type="solid")
+    azul        = PatternFill(start_color="BDD7EE", fill_type="solid")
+    cinza       = PatternFill(start_color="D9D9D9", fill_type="solid")
 
-    vermelho = PatternFill(start_color="FF4C4C", fill_type="solid")
-    verde = PatternFill(start_color="C6EFCE", fill_type="solid")
-    amarelo = PatternFill(start_color="FFF3B0", fill_type="solid")
-    azul = PatternFill(start_color="BDD7EE", fill_type="solid")
-    cinza = PatternFill(start_color="D9D9D9", fill_type="solid")
-
+    # FIX #1: índices por nome de coluna, não posição hardcoded
     headers = [cell.value for cell in ws[1]]
+    col_idx = {v: i for i, v in enumerate(headers)}
 
     for cell in ws[1]:
         cell.font = Font(bold=True, color="FFFFFF")
@@ -361,55 +328,49 @@ def gerar_excel(df):
         cell.border = borda
 
     for i, row in enumerate(ws.iter_rows(min_row=2), start=2):
-
         for j, cell in enumerate(row):
             coluna = headers[j]
-
-            if coluna == "Perfil":
+            if coluna in ("Perfil", "Estratégia Comercial"):
                 cell.alignment = Alignment(horizontal="left", vertical="center")
             elif coluna == "Minutos":
                 cell.alignment = Alignment(horizontal="center", vertical="center")
-            elif coluna == "Estratégia Comercial":
-                cell.alignment = Alignment(horizontal="left", vertical="center")
             else:
                 cell.alignment = Alignment(horizontal="center", vertical="center")
-
             cell.border = borda
 
         if i % 2 == 0:
             for cell in row:
                 cell.fill = zebra
 
-        perfil = str(row[8].value)
-        uso = str(row[9].value)
-        estrategia = str(row[10].value)
+        # FIX #1: usa índice por nome
+        perfil     = str(row[col_idx["Perfil"]].value) if "Perfil" in col_idx else ""
+        uso        = str(row[col_idx["Em Uso"]].value) if "Em Uso" in col_idx else ""
+        estrategia = str(row[col_idx["Estratégia Comercial"]].value) if "Estratégia Comercial" in col_idx else ""
 
         if "Alto" in perfil:
-            row[8].fill = vermelho
+            row[col_idx["Perfil"]].fill = vermelho
         elif "Médio" in perfil:
-            row[8].fill = amarelo
+            row[col_idx["Perfil"]].fill = amarelo
 
-        if uso == "Não":
-            row[9].fill = vermelho
-        else:
-            row[9].fill = verde
+        if "Em Uso" in col_idx:
+            if uso == "Não":
+                row[col_idx["Em Uso"]].fill = vermelho
+            else:
+                row[col_idx["Em Uso"]].fill = verde
 
-        if "Manter" in estrategia:
-            row[10].fill = cinza
-        elif "Sustentar" in estrategia:
-            row[10].fill = amarelo
-        elif "Bem dimensionado" in estrategia:
-            row[10].fill = verde
-        elif "Upsell" in estrategia:
-            row[10].fill = azul
+        if "Estratégia Comercial" in col_idx:
+            if "Manter" in estrategia:
+                row[col_idx["Estratégia Comercial"]].fill = cinza
+            elif "Sustentar" in estrategia:
+                row[col_idx["Estratégia Comercial"]].fill = amarelo
+            elif "Bem dimensionado" in estrategia:
+                row[col_idx["Estratégia Comercial"]].fill = verde
+            elif "Upsell" in estrategia:
+                row[col_idx["Estratégia Comercial"]].fill = azul
 
     for col in ws.columns:
-        max_length = 0
-        col_letter = col[0].column_letter
-        for cell in col:
-            if cell.value:
-                max_length = max(max_length, len(str(cell.value)))
-        ws.column_dimensions[col_letter].width = max_length + 3
+        max_length = max((len(str(cell.value)) for cell in col if cell.value), default=10)
+        ws.column_dimensions[col[0].column_letter].width = max_length + 3
 
     ws.freeze_panes = "A2"
     ws.auto_filter.ref = ws.dimensions
@@ -417,13 +378,10 @@ def gerar_excel(df):
     buffer = io.BytesIO()
     wb.save(buffer)
     buffer.seek(0)
-
     return buffer
 
 # ===== EXECUÇÃO =====
-
 if uploaded_files:
-
     df_total = pd.DataFrame()
     cliente_nome = "CLIENTE"
     vencimento_fatura = ""
@@ -432,18 +390,22 @@ if uploaded_files:
     total_files = len(uploaded_files)
 
     for i, file in enumerate(uploaded_files):
-        with st.spinner(f"Processando {file.name}..."):
-            df, cliente, vencimento = processar_pdf(file)
-            df_total = pd.concat([df_total, df])
-            cliente_nome = cliente
-            vencimento_fatura = vencimento
+        # FIX #11: tratamento de erro no processamento
+        try:
+            with st.spinner(f"Processando {file.name}..."):
+                df, cliente, vencimento = processar_pdf(file)
+                # FIX #12: ignore_index=True no concat
+                df_total = pd.concat([df_total, df], ignore_index=True)
+                cliente_nome = cliente
+                vencimento_fatura = vencimento
+        except Exception as e:
+            st.error(f"❌ Erro ao processar **{file.name}**: {e}")
+            continue
 
         progress.progress((i + 1) / total_files)
 
     if not df_total.empty:
-
         col1, col2, col3, col4 = st.columns(4)
-
         total_linhas = len(df_total)
         em_uso = (df_total["Em Uso"] == "Sim").sum()
         total_gb = df_total["Internet (MB)"].sum() / 1024
@@ -459,7 +421,11 @@ if uploaded_files:
 
         excel = gerar_excel(df_total)
 
-        nome_arquivo = f"Analise_Target_{cliente_nome}_{vencimento_fatura}.xlsx" if vencimento_fatura else f"Analise_Target_{cliente_nome}.xlsx"
+        nome_arquivo = (
+            f"Analise_Target_{cliente_nome}_{vencimento_fatura}.xlsx"
+            if vencimento_fatura
+            else f"Analise_Target_{cliente_nome}.xlsx"
+        )
 
         st.download_button(
             "📥 Baixar Relatório Excel",
