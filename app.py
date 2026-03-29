@@ -7,7 +7,17 @@ import os
 from openpyxl import Workbook
 from openpyxl.utils.dataframe import dataframe_to_rows
 from openpyxl.styles import Alignment, PatternFill, Font, Border, Side
+from google.cloud import vision
+from google.oauth2 import service_account
+import json
+import streamlit as st
 
+creds_dict = json.loads(st.secrets["GOOGLE_CREDENTIALS"])
+credentials = service_account.Credentials.from_service_account_info(creds_dict)
+
+client = vision.ImageAnnotatorClient(credentials=credentials)
+
+st.success("✅ Google Vision conectado com sucesso")
 st.set_page_config(
     layout="wide",
     page_title="Target Telecom · Análise de Faturas",
