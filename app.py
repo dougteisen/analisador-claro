@@ -336,7 +336,23 @@ uploaded_files = st.file_uploader(
     accept_multiple_files=True,
     label_visibility="visible"
 )
+def extrair_texto_com_ocr(file_bytes):
+    from google.cloud import vision
+    from google.oauth2 import service_account
+    import streamlit as st
 
+    creds_dict = st.secrets["GOOGLE_CREDENTIALS"]
+    credentials = service_account.Credentials.from_service_account_info(creds_dict)
+    client = vision.ImageAnnotatorClient(credentials=credentials)
+
+    image = vision.Image(content=file_bytes)
+
+    response = client.document_text_detection(image=image)
+
+    if response.error.message:
+        return ""
+
+    return response.full_text_annotation.text
 # ===== UTILITÁRIOS =====
 
 def normalizar_numero(num_str: str) -> str:
@@ -502,15 +518,28 @@ def extrair_gb_pacote(pacote: str) -> int:
 def processar_pdf(file):
     texto = ""
     placeholder = st.empty()
-    with pdfplumber.open(file) as pdf:
-        total_paginas = len(pdf.pages)
-        progresso = st.progress(0)
-        for i, page in enumerate(pdf.pages):
-            placeholder.text(f"📄 Processando página {i+1} de {total_paginas}")
-            t = page.extract_text()
-            if t:
-                texto += t + "\n"
-            progresso.progress((i + 1) / total_paginas)
+   with pdfplumber.open(file) as pdf:
+    total_paginas = len(pdf.pages)
+    progresso = st.progress(0)
+
+    for i, page in enumerate(pdf.pages):
+        placeholder.text(f"📄 Processando página {i+1} de {total_paginas}")
+
+        texto_pagina = page.extract_text()
+
+        if texto_pagina:
+            texto += texto_pagina + "\n"
+        else:
+            # 🔥 OCR fallback
+            imagem = page.to_image(resolution=300).original
+            import io
+            img_bytes = io.BytesIO()
+            imagem.save(img_bytes, format="PNG")
+
+            texto_ocr = extrair_texto_com_ocr(img_bytes.getvalue())
+            texto += texto_ocr + "\n"
+
+        progresso.progress((i + 1) / total_paginas)
         placeholder.text("🔍 Extraindo dados...")
 
     cliente = extrair_cliente(texto)
