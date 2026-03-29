@@ -10,8 +10,9 @@ from openpyxl.styles import Alignment, PatternFill, Font, Border, Side
 from google.cloud import vision
 from google.oauth2 import service_account
 import streamlit as st
+import json
 
-creds_dict = st.secrets["GOOGLE_CREDENTIALS"]
+creds_dict = json.loads(st.secrets["GOOGLE_CREDENTIALS"])
 
 credentials = service_account.Credentials.from_service_account_info(creds_dict)
 
