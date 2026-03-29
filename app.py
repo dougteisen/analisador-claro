@@ -362,17 +362,21 @@ def normalizar_numero(num_str: str) -> str:
 def extrair_blocos_por_linha(texto: str) -> dict:
     import re
 
-    padrao = r"DETALHAMENTO DE LIGAÇÕES E SERVIÇOS DO CELULAR\s*\((\d{2}\)\s*\d{5}\s*\d{4})\)"
-    partes = re.split(padrao, texto)
+    padrao = r"DETALHAMENTO DE LIGAÇÕES E SERVIÇOS DO CELULAR.*?\((\d{2})\)?\s*(\d{5})\s*(\d{4})"
+
+    matches = list(re.finditer(padrao, texto, re.DOTALL))
 
     resultado = {}
 
-    for i in range(1, len(partes), 2):
-        numero = partes[i]
-        bloco = partes[i + 1]
+    for i, match in enumerate(matches):
+        inicio = match.start()
+        fim = matches[i + 1].start() if i + 1 < len(matches) else len(texto)
 
-        numero_limpo = numero.replace("(", "").replace(")", "").replace(" ", "")
-        resultado[numero_limpo] = bloco
+        bloco = texto[inicio:fim]
+
+        numero = f"{match.group(1)}{match.group(2)}{match.group(3)}"
+
+        resultado[numero] = bloco
 
     return resultado
 
