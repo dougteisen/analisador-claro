@@ -518,29 +518,31 @@ def extrair_gb_pacote(pacote: str) -> int:
 def processar_pdf(file):
     texto = ""
     placeholder = st.empty()
-   with pdfplumber.open(file) as pdf:
-    total_paginas = len(pdf.pages)
-    progresso = st.progress(0)
 
-    for i, page in enumerate(pdf.pages):
-        placeholder.text(f"📄 Processando página {i+1} de {total_paginas}")
+    with pdfplumber.open(file) as pdf:
+        total_paginas = len(pdf.pages)
+        progresso = st.progress(0)
 
-        texto_pagina = page.extract_text()
+        for i, page in enumerate(pdf.pages):
+            placeholder.text(f"📄 Processando página {i+1} de {total_paginas}")
 
-        if texto_pagina:
-            texto += texto_pagina + "\n"
-        else:
-            # 🔥 OCR fallback
-            imagem = page.to_image(resolution=300).original
-            import io
-            img_bytes = io.BytesIO()
-            imagem.save(img_bytes, format="PNG")
+            texto_pagina = page.extract_text()
 
-            texto_ocr = extrair_texto_com_ocr(img_bytes.getvalue())
-            texto += texto_ocr + "\n"
+            if texto_pagina:
+                texto += texto_pagina + "\n"
+            else:
+                # 🔥 OCR fallback
+                imagem = page.to_image(resolution=300).original
+                import io
+                img_bytes = io.BytesIO()
+                imagem.save(img_bytes, format="PNG")
 
-        progresso.progress((i + 1) / total_paginas)
-        placeholder.text("🔍 Extraindo dados...")
+                texto_ocr = extrair_texto_com_ocr(img_bytes.getvalue())
+                texto += texto_ocr + "\n"
+
+                progresso.progress((i + 1) / total_paginas)
+
+    placeholder.text("🔎 Extraindo dados...")
 
     cliente = extrair_cliente(texto)
     vencimento = extrair_vencimento(texto)
