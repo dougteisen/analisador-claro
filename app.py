@@ -360,17 +360,20 @@ def normalizar_numero(num_str: str) -> str:
     return num_str.replace("(", "").replace(")", "").replace(" ", "")
 
 def extrair_blocos_por_linha(texto: str) -> dict:
-    """
-    FIX #10 (DRY): centraliza o split e busca de número.
-    Retorna {numero_sem_formatacao: bloco_texto}.
-    """
-    blocos = re.split(r"DETALHAMENTO DE LIGAÇÕES E SERVIÇOS DO CELULAR", texto)
+    import re
+
+    padrao = r"DETALHAMENTO DE LIGAÇÕES E SERVIÇOS DO CELULAR\s*\((\d{2}\)\s*\d{5}\s*\d{4})\)"
+    partes = re.split(padrao, texto)
+
     resultado = {}
-    for bloco in blocos:
-        num = re.search(r"\(\d{2}\)\s\d{5}\s\d{4}", bloco)
-        if num:
-            chave = normalizar_numero(num.group(0))
-            resultado[chave] = bloco
+
+    for i in range(1, len(partes), 2):
+        numero = partes[i]
+        bloco = partes[i + 1]
+
+        numero_limpo = numero.replace("(", "").replace(")", "").replace(" ", "")
+        resultado[numero_limpo] = bloco
+
     return resultado
 
 def extrair_cliente(texto: str) -> str:
