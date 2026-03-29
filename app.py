@@ -419,9 +419,9 @@ def extrair_pacote_e_passaporte(blocos: dict) -> dict:
         passaporte = "-"
         valor_passaporte = "0"
 
-        # FIX #5 (pacote): captura todos os planos possíveis da Claro
+        # Captura todos os planos possíveis: Claro Pós/Life Ilimitado/Controle e Plano Wi-Fi
         m = re.search(
-            r"(Claro\s+(?:Pós|Life Ilimitado|Controle)\s+\d+\s*GB)",
+            r"((?:Claro\s+(?:Pós|Life Ilimitado|Controle)|Plano de Internet Wi-Fi)\s+\d+\s*GB)",
             bloco
         )
         if m:
