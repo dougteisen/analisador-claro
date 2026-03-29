@@ -7,17 +7,16 @@ import os
 from openpyxl import Workbook
 from openpyxl.utils.dataframe import dataframe_to_rows
 from openpyxl.styles import Alignment, PatternFill, Font, Border, Side
-from google.cloud import vision
-from google.oauth2 import service_account
-import streamlit as st
 
-creds_dict = st.secrets["GOOGLE_CREDENTIALS"]
+# ── Google Vision (OCR para PDFs de imagem) ──────────────────────────────────
+try:
+    from google.cloud import vision
+    from google.oauth2 import service_account
+    _VISION_DISPONIVEL = True
+except ImportError:
+    _VISION_DISPONIVEL = False
 
-credentials = service_account.Credentials.from_service_account_info(creds_dict)
-
-client = vision.ImageAnnotatorClient(credentials=credentials)
-
-st.success("✅ Google Vision conectado com sucesso")
+# FIX 1: st.set_page_config() DEVE ser a primeira chamada Streamlit — sem nada antes
 st.set_page_config(
     layout="wide",
     page_title="Target Telecom · Análise de Faturas",
@@ -336,23 +335,45 @@ uploaded_files = st.file_uploader(
     accept_multiple_files=True,
     label_visibility="visible"
 )
-def extrair_texto_com_ocr(file_bytes):
-    from google.cloud import vision
-    from google.oauth2 import service_account
-    import streamlit as st
 
-    creds_dict = st.secrets["GOOGLE_CREDENTIALS"]
-    credentials = service_account.Credentials.from_service_account_info(creds_dict)
-    client = vision.ImageAnnotatorClient(credentials=credentials)
+# ===== GOOGLE VISION — cliente único (singleton) =====
+# FIX 2: instanciado UMA vez aqui, não repetido dentro de cada função
+_vision_client = None
 
-    image = vision.Image(content=file_bytes)
+def _get_vision_client():
+    """Retorna o cliente Vision, criando-o na primeira chamada."""
+    global _vision_client
+    if _vision_client is not None:
+        return _vision_client
+    if not _VISION_DISPONIVEL:
+        return None
+    try:
+        creds_dict = st.secrets["GOOGLE_CREDENTIALS"]
+        credentials = service_account.Credentials.from_service_account_info(creds_dict)
+        _vision_client = vision.ImageAnnotatorClient(credentials=credentials)
+        return _vision_client
+    except Exception as e:
+        st.warning(f"⚠️ Google Vision não configurado: {e}. PDFs de imagem não serão suportados.")
+        return None
 
-    response = client.document_text_detection(image=image)
-
-    if response.error.message:
+def extrair_texto_com_ocr(img_bytes: bytes) -> str:
+    """
+    Envia imagem PNG (bytes) para Google Vision e retorna o texto extraído.
+    FIX 6: recebe bytes puros (não BytesIO) — chamador deve usar .getvalue()
+    FIX 2: usa cliente singleton, não recria a cada chamada
+    """
+    client = _get_vision_client()
+    if client is None:
+        return ""
+    try:
+        image = vision.Image(content=img_bytes)
+        response = client.document_text_detection(image=image)
+        if response.error.message:
+            return ""
+        return response.full_text_annotation.text or ""
+    except Exception:
         return ""
 
-    return response.full_text_annotation.text
 # ===== UTILITÁRIOS =====
 
 def normalizar_numero(num_str: str) -> str:
@@ -360,24 +381,18 @@ def normalizar_numero(num_str: str) -> str:
     return num_str.replace("(", "").replace(")", "").replace(" ", "")
 
 def extrair_blocos_por_linha(texto: str) -> dict:
-    import re
-
-    padrao = r"DETALHAMENTO DE LIGAÇÕES E SERVIÇOS DO CELULAR.*?\((\d{2})\)?\s*(\d{5})\s*(\d{4})"
-
-    matches = list(re.finditer(padrao, texto, re.DOTALL))
-
+    """
+    Centraliza o split e busca de número.
+    Retorna {numero_sem_formatacao: bloco_texto}.
+    Mantém a versão original robusta que funciona em ambos os tipos de PDF.
+    """
+    blocos = re.split(r"DETALHAMENTO DE LIGAÇÕES E SERVIÇOS DO CELULAR", texto)
     resultado = {}
-
-    for i, match in enumerate(matches):
-        inicio = match.start()
-        fim = matches[i + 1].start() if i + 1 < len(matches) else len(texto)
-
-        bloco = texto[inicio:fim]
-
-        numero = f"{match.group(1)}{match.group(2)}{match.group(3)}"
-
-        resultado[numero] = bloco
-
+    for bloco in blocos:
+        num = re.search(r"\(\d{2}\)\s\d{5}\s\d{4}", bloco)
+        if num:
+            chave = normalizar_numero(num.group(0))
+            resultado[chave] = bloco
     return resultado
 
 def extrair_cliente(texto: str) -> str:
@@ -523,46 +538,62 @@ def extrair_gb_pacote(pacote: str) -> int:
     return int(m.group(1)) if m else 0
 
 def processar_pdf(file):
+    """
+    Processa um PDF da Claro extraindo texto por duas estratégias:
+    1. pdfplumber (PDFs com texto digital) — rápido e preciso
+    2. Google Vision OCR (PDFs de imagem escaneados) — fallback por página
+    FIX 4/8: barra de progresso avança em TODAS as páginas, não só nas de OCR
+    FIX 7: texto concatenado por página mantém contexto correto
+    """
     texto = ""
     placeholder = st.empty()
+    usou_ocr = False
 
     with pdfplumber.open(file) as pdf:
         total_paginas = len(pdf.pages)
         progresso = st.progress(0)
 
         for i, page in enumerate(pdf.pages):
-            placeholder.text(f"📄 Processando página {i+1} de {total_paginas}")
+            placeholder.text(f"📄 Processando página {i+1} de {total_paginas}...")
 
-            texto_pagina = page.extract_text()
+            t = page.extract_text()
 
-            if texto_pagina:
-                texto += texto_pagina + "\n"
+            if t and t.strip():
+                # PDF com texto digital — extração direta
+                texto += t + "\n"
             else:
-                # 🔥 OCR fallback
-                imagem = page.to_image(resolution=300).original
-                import io
-                img_bytes = io.BytesIO()
-                imagem.save(img_bytes, format="PNG")
+                # PDF de imagem — aplica OCR via Google Vision
+                if not usou_ocr:
+                    usou_ocr = True
+                    placeholder.text(f"🔍 PDF de imagem detectado — aplicando OCR na página {i+1}...")
 
-                texto_ocr = extrair_texto_com_ocr(img_bytes.getvalue())
+                img_buf = io.BytesIO()
+                page.to_image(resolution=300).original.save(img_buf, format="PNG")
+                texto_ocr = extrair_texto_com_ocr(img_buf.getvalue())
                 texto += texto_ocr + "\n"
 
-                progresso.progress((i + 1) / total_paginas)
+            # FIX 4: progresso avança para TODA página, não só as de OCR
+            progresso.progress((i + 1) / total_paginas)
 
-    placeholder.text("🔎 Extraindo dados...")
+        placeholder.text("🔎 Extraindo dados...")
+
+    if usou_ocr and not texto.strip():
+        progresso.empty()
+        placeholder.empty()
+        raise ValueError(
+            "Não foi possível extrair texto do PDF. "
+            "Verifique se o Google Vision está configurado nos secrets."
+        )
 
     cliente = extrair_cliente(texto)
     vencimento = extrair_vencimento(texto)
     linhas = extrair_linhas(texto)
-
-    # FIX #10: blocos extraídos uma única vez
     blocos = extrair_blocos_por_linha(texto)
 
     mensalidades = extrair_mensalidades(blocos)
     detalhamento = extrair_detalhamento(blocos)
     pacotes = extrair_pacote_e_passaporte(blocos)
 
-    # Limpa os elementos de progresso
     progresso.empty()
     placeholder.empty()
 
