@@ -723,6 +723,8 @@ Regras:
         st.error(f"❌ Erro na chamada à API Anthropic: {type(e).__name__}: {e}")
         return None
 
+
+def processar_pdf(file):
     """
     Processa PDF da Claro com 2 estratégias:
     1. PDF digital  → pdfplumber + regex (texto nativo, rápido e preciso)
