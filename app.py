@@ -380,21 +380,6 @@ def normalizar_numero(num_str: str) -> str:
     """Remove parênteses e espaços do número de telefone."""
     return num_str.replace("(", "").replace(")", "").replace(" ", "")
 
-def extrair_blocos_por_linha(texto: str) -> dict:
-    """
-    Centraliza o split e busca de número.
-    Retorna {numero_sem_formatacao: bloco_texto}.
-    Mantém a versão original robusta que funciona em ambos os tipos de PDF.
-    """
-    blocos = re.split(r"DETALHAMENTO DE LIGAÇÕES E SERVIÇOS DO CELULAR", texto)
-    resultado = {}
-    for bloco in blocos:
-        num = re.search(r"\(\d{2}\)\s\d{5}\s\d{4}", bloco)
-        if num:
-            chave = normalizar_numero(num.group(0))
-            resultado[chave] = bloco
-    return resultado
-
 def extrair_cliente(texto: str) -> str:
     linhas = texto.split("\n")
     for i, linha in enumerate(linhas):
@@ -418,7 +403,11 @@ def extrair_vencimento(texto: str) -> str:
     return ""
 
 def extrair_linhas(texto: str) -> list:
+    # Padrão principal: (11) 98936 0484
     linhas = re.findall(r"\(\d{2}\)\s\d{5}\s\d{4}", texto)
+    # Fallback OCR: número pode vir sem parênteses ou com espaçamento diferente
+    if not linhas:
+        linhas = re.findall(r"\d{2}\s\d{5}\s\d{4}", texto)
     lista = []
     for l in linhas:
         num = normalizar_numero(l)
@@ -426,37 +415,77 @@ def extrair_linhas(texto: str) -> list:
             lista.append(num)
     return lista
 
+def extrair_blocos_por_linha(texto: str) -> dict:
+    """
+    Divide o texto em blocos por linha telefônica.
+    Suporta PDFs digitais e texto OCR (com variações de espaçamento).
+    """
+    blocos = re.split(r"DETALHAMENTO DE LIGAÇÕES E SERVIÇOS DO CELULAR", texto)
+    resultado = {}
+    for bloco in blocos:
+        # Padrão principal com parênteses
+        num = re.search(r"\(\d{2}\)\s\d{5}\s\d{4}", bloco)
+        if num:
+            chave = normalizar_numero(num.group(0))
+            resultado[chave] = bloco
+        else:
+            # Fallback: número sem parênteses (variação OCR)
+            num = re.search(r"^\s*\d{2}\s\d{5}\s\d{4}", bloco, re.MULTILINE)
+            if num:
+                chave = normalizar_numero(num.group(0))
+                resultado[chave] = bloco
+    return resultado
+
 def extrair_mensalidades(blocos: dict) -> dict:
     """
-    Captura o TOTAL de cada linha.
-    Usa TOTAL R$(...) do bloco — mas se houver desconto negativo que reduziu
-    o total incorretamente, soma apenas os valores positivos da seção.
+    Captura o TOTAL de cada linha com múltiplos fallbacks para suportar
+    variações de formatação em PDFs digitais e PDFs de imagem (OCR).
     """
     mapa = {}
     for linha, bloco in blocos.items():
-        # Regex sem espaço obrigatório entre R$ e valor (formato do PDF: "TOTAL R$59,15")
-        total_m = re.search(r"TOTAL\s*R\$\s*([\d\.,]+)", bloco)
-        total_pdf = float(total_m.group(1).replace(".", "").replace(",", ".")) if total_m else 0.0
+        total_pdf = 0.0
+        total_str = None
 
-        # Somar valores positivos da seção de mensalidades
-        secao = re.search(r"Mensalidades e Pacotes Promocionais(.*?)TOTAL\s*R\$", bloco, re.DOTALL)
+        # Estratégia 1: "TOTAL R$59,15" ou "TOTAL R$ 59,15" (com ou sem espaço)
+        m = re.search(r"TOTAL\s*R\$\s*([\d\.,]+)", bloco)
+        if m:
+            total_str = m.group(1)
+            try:
+                total_pdf = float(total_str.replace(".", "").replace(",", "."))
+            except (ValueError, TypeError):
+                pass
+
+        # Estratégia 2: "TOTAL RS59,15" — OCR confunde $ com S
+        if total_pdf == 0.0:
+            m = re.search(r"TOTAL\s+R[S$]\s*([\d\.,]+)", bloco, re.IGNORECASE)
+            if m:
+                total_str = m.group(1)
+                try:
+                    total_pdf = float(total_str.replace(".", "").replace(",", "."))
+                except (ValueError, TypeError):
+                    pass
+
+        # Estratégia 3: somar valores positivos da seção de mensalidades
+        # — fallback robusto quando TOTAL não é detectado e também
+        #   serve para ignorar descontos negativos (ex: Desconto Dados GPRS)
+        secao = re.search(r"Mensalidades e Pacotes Promocionais(.*?)TOTAL", bloco, re.DOTALL)
         soma_positivos = 0.0
         if secao:
             for lb in secao.group(1).split("\n"):
-                m = re.search(r"(-?[\d]+,\d{2})$", lb.strip())
-                if m:
+                mv = re.search(r"(-?[\d]+,\d{2})$", lb.strip())
+                if mv:
                     try:
-                        val = float(m.group(1).replace(".", "").replace(",", "."))
+                        val = float(mv.group(1).replace(".", "").replace(",", "."))
                         if val > 0:
                             soma_positivos += val
                     except (ValueError, TypeError):
                         pass
 
-        # Se descontos negativos reduziram o total, usa soma dos positivos
+        # Se descontos reduziram o total, ou se total não foi detectado, usa soma
         if soma_positivos > total_pdf + 0.01:
             mapa[linha] = f"{soma_positivos:.2f}".replace(".", ",")
-        elif total_m:
-            mapa[linha] = total_m.group(1)
+        elif total_str:
+            mapa[linha] = total_str
 
     return mapa
 
@@ -504,17 +533,40 @@ def extrair_pacote_e_passaporte(blocos: dict) -> dict:
 def extrair_detalhamento(blocos: dict) -> dict:
     mapa = {}
     for linha, bloco in blocos.items():
-        # FIX Internet: pega apenas a linha "Internet X" da seção Serviços local,
-        # sem incluir "Internet - meses anteriores", evitando multi-Subtotal do roaming.
         internet = "0"
+
+        # Estratégia 1: âncora em "Serviços (Torpedos" + linha "Internet X"
+        # Funciona em PDFs digitais onde a seção está bem estruturada
         m = re.search(
-            r"Serviços \(Torpedos.*?^Internet\s+([\d\.,]+)\s+0,00",
-            bloco, re.DOTALL | re.MULTILINE
+            r"Servi[çc]os\s*\(Torpedos.*?^Internet\s+([\d\.]+[,\.][\d]+)\s+0[,\.]00",
+            bloco, re.DOTALL | re.MULTILINE | re.IGNORECASE
         )
         if m:
             internet = m.group(1)
+        else:
+            # Estratégia 2: linha "Internet X,XXX 0,00" sem exigir âncora
+            # Mais tolerante a variações de OCR
+            m = re.search(
+                r"^Internet\s+([\d\.]+[,\.][\d]+)\s+0[,\.]00",
+                bloco, re.MULTILINE | re.IGNORECASE
+            )
+            if m:
+                internet = m.group(1)
+            else:
+                # Estratégia 3: Subtotal após seção Internet (ignora Subtotal 0,00 do roaming)
+                m = re.search(
+                    r"Internet\s+[\d\.,]+.*?Subtotal\s+([\d\.]+[,\.][\d]+)\s+0[,\.]00",
+                    bloco, re.DOTALL | re.IGNORECASE
+                )
+                if m:
+                    try:
+                        val = float(m.group(1).replace(".", "").replace(",", "."))
+                        if val > 0:
+                            internet = m.group(1)
+                    except (ValueError, TypeError):
+                        pass
 
-        # Minutos: busca o TOTAL no formato "Xmin Ys", "Xmin" ou "Xs"
+        # Minutos: "Xmin Ys", "Xmin", "Xs" — tolerante a variações OCR
         minutos = "0"
         m = re.search(r"TOTAL\s+([\d]+min[\d]*s?|[\d]+s)", bloco)
         if m:
