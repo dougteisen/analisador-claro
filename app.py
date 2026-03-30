@@ -637,25 +637,33 @@ def processar_pdf(file):
     mensalidades = extrair_mensalidades(blocos)
     detalhamento = extrair_detalhamento(blocos, texto)
     pacotes = extrair_pacote_e_passaporte(blocos)
+    valores = extrair_valores_por_linha(texto)
+    minutos_total = extrair_minutos_total(texto)
+    internet_total = extrair_internet_total(texto)
 
     progresso.empty()
     placeholder.empty()
 
     dados = []
-    for linha in linhas:
-        total = to_float(mensalidades.get(linha, "0"))
+    for i, linha in enumerate(linhas):
+        # 🔥 NOVA LÓGICA
+        if i < len(valores):
+            valor_plano = float(valores[i].replace(",", "."))
+        else:
+            valor_plano = 0
+
         valor_passaporte = to_float(pacotes.get(linha, {}).get("Valor Passaporte", "0"))
-        valor_plano = total - valor_passaporte
+        total = valor_plano + valor_passaporte
 
         dados.append({
             "Linha": linha,
-            "Internet (MB)": detalhamento.get(linha, {}).get("Internet (MB)", "0"),
+            "Internet (MB)": internet_total / len(linhas) if linhas else 0,
             "Pacote de dados": pacotes.get(linha, {}).get("Pacote", "-"),
             "Mensalidade": f"R$ {valor_plano:.2f}".replace(".", ","),
             "Passaporte": pacotes.get(linha, {}).get("Passaporte", "-"),
             "Mensalidade Passaporte": f"R$ {valor_passaporte:.2f}".replace(".", ",") if valor_passaporte else "-",
             "Total por linha": f"R$ {total:.2f}".replace(".", ","),
-            "Minutos": detalhamento.get(linha, {}).get("Minutos", "0")
+            "Minutos": minutos_total if i == 0 else "0"
         })
 
     df = pd.DataFrame(dados)
