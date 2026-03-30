@@ -632,17 +632,20 @@ def extrair_gb_pacote(pacote: str) -> int:
 def analisar_blocos_com_ia(texto_ocr: str) -> list[dict] | None:
     """
     Usa o Claude API para extrair dados estruturados do texto OCR bruto.
+    Ativado sempre que OCR foi necessário (PDFs de imagem).
     Retorna lista de dicts com os campos de cada linha, ou None em caso de erro.
-    Ativado quando o OCR foi usado E os regex falharam (blocos vazios).
     """
     import json, requests
 
-    prompt = f"""Você é um extrator de dados de faturas telefônicas da Claro Empresas.
-Abaixo está o texto bruto extraído via OCR de uma fatura PDF. O texto pode ter erros de acentuação, espaçamento irregular ou caracteres confusos — isso é normal em OCR.
+    prompt = f"""Você é um extrator de dados de faturas telefônicas da Claro Empresas (Brasil).
+O texto abaixo foi extraído via OCR de uma fatura PDF escaneada. Pode haver erros de acentuação (ex: LIGACOES em vez de LIGAÇÕES), espaçamentos irregulares, e colunas de tabela colapsadas em uma linha só.
 
-Extraia os dados de CADA linha telefônica presente no texto e retorne SOMENTE um JSON válido, sem nenhum texto adicional antes ou depois.
+Extraia os dados de CADA linha telefônica presente no texto.
+Cada linha começa com "DETALHAMENTO DE LIGACOES" ou "DETALHAMENTO DE LIGAÇÕES" seguido do número no formato (11) 98936 0484.
 
-Formato esperado (array de objetos):
+Retorne SOMENTE um array JSON válido, sem texto antes ou depois, sem markdown.
+
+Formato:
 [
   {{
     "linha": "11989360484",
@@ -655,18 +658,18 @@ Formato esperado (array de objetos):
   }}
 ]
 
-Regras:
-- "linha": número com 11 dígitos, sem espaços ou parênteses
-- "pacote": nome completo do plano (ex: "Claro Pós 10GB", "Claro Pós 20GB", "Plano de Internet Wi-Fi 50GB")
-- "mensalidade_total": valor do TOTAL da linha em reais, apenas números e vírgula (ex: "44,99")
-- "internet_mb": total de Mbytes utilizados de Internet (some linha Internet + meses anteriores se houver), apenas números e vírgula/ponto
-- "minutos": total de minutos/segundos no formato original (ex: "26min12s", "0")
-- "passaporte": nome do passaporte se existir (ex: "Claro Passaporte Americas 5GB"), caso contrário "-"
-- "valor_passaporte": valor do passaporte em reais (ex: "14,99"), caso contrário "0"
-- Se um campo não for encontrado, use "" para string e "0" para números
+Regras importantes:
+- "linha": 11 dígitos sem espaços/parênteses (DDD + número)
+- "pacote": nome do plano individual da linha (ex: "Claro Pós 10GB", "Claro Pós 20GB"). NÃO use o nome da oferta conjunta.
+- "mensalidade_total": valor do TOTAL da LINHA (não o total geral da fatura). Cada linha tem seu próprio TOTAL logo após suas cobranças individuais.
+- "internet_mb": Mbytes de Internet utilizados nessa linha. Some "Internet" + "Internet - meses anteriores" se houver. Use apenas números e vírgula.
+- "minutos": duração total de ligações no formato original (ex: "26min12s", "0")
+- "passaporte": nome do passaporte se existir, senão "-"
+- "valor_passaporte": valor do passaporte em reais, senão "0"
+- ATENÇÃO: a fatura pode ter um resumo geral na primeira página com totais globais — ignore esses valores globais, use apenas os totais individuais de cada seção DETALHAMENTO.
 
-TEXTO DA FATURA:
-{texto_ocr[:8000]}
+TEXTO DA FATURA (OCR):
+{texto_ocr[:10000]}
 """
 
     try:
@@ -675,10 +678,10 @@ TEXTO DA FATURA:
             headers={"Content-Type": "application/json"},
             json={
                 "model": "claude-sonnet-4-20250514",
-                "max_tokens": 1000,
+                "max_tokens": 2000,
                 "messages": [{"role": "user", "content": prompt}]
             },
-            timeout=30
+            timeout=45
         )
         if resp.status_code != 200:
             return None
@@ -688,8 +691,6 @@ TEXTO DA FATURA:
             bloco["text"] for bloco in data.get("content", [])
             if bloco.get("type") == "text"
         )
-
-        # Limpar fences markdown se presentes
         texto_resposta = re.sub(r"```json|```", "", texto_resposta).strip()
         return json.loads(texto_resposta)
 
@@ -777,13 +778,16 @@ def processar_pdf(file):
     linhas = extrair_linhas(texto)
     blocos = extrair_blocos_por_linha(texto)
 
-    # ── Camada 3: IA como fallback quando OCR gerou texto mas blocos falharam ──
-    # Caso típico: OCR removeu acentos → split "LIGAÇÕES" não encontrou "LIGACOES"
-    usar_ia = usou_ocr and linhas and len(blocos) == 0
+    # ── Camada 3: IA para QUALQUER PDF que usou OCR ──────────────────────────
+    # Regex são frágeis com texto OCR (acentos perdidos, colunas colapsadas,
+    # espaçamentos variáveis). Se o Vision foi usado, a IA interpreta o texto
+    # bruto diretamente — mais confiável que tentar corrigir regex para cada
+    # variação possível de OCR.
+    # Para PDFs digitais (usou_ocr=False), regex continuam sendo usados pois
+    # o texto é limpo e estruturado.
     dados_ia = None
-
-    if usar_ia:
-        placeholder.text("🤖 Ativando análise por IA (texto OCR com variações)...")
+    if usou_ocr and texto.strip():
+        placeholder.text("🤖 Analisando fatura com IA...")
         dados_ia = analisar_blocos_com_ia(texto)
 
     progresso.empty()
