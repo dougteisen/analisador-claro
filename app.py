@@ -376,6 +376,39 @@ def extrair_texto_com_ocr(img_bytes: bytes) -> str:
 
 # ===== UTILITÁRIOS =====
 
+def extrair_valores_por_linha(texto: str) -> list:
+    import re
+    
+    # pega valores tipo 29,90 / 39,90 / 59,90
+    valores = re.findall(r"\b\d{2,3},\d{2}\b", texto)
+    
+    # remove duplicados mantendo ordem
+    valores_unicos = []
+    for v in valores:
+        if v not in valores_unicos:
+            valores_unicos.append(v)
+    
+    return valores_unicos
+def extrair_minutos_total(texto: str) -> str:
+    import re
+    
+    match = re.search(r"(\d+)\s*min", texto.lower())
+    if match:
+        return f"{match.group(1)}min"
+    
+    return "0"
+
+def extrair_internet_total(texto: str) -> float:
+    import re
+    
+    matches = re.findall(r"(\d+[\.,]?\d*)\s*GB", texto, re.IGNORECASE)
+    
+    if matches:
+        return float(matches[0].replace(",", "."))
+    
+    return 0
+
+
 def normalizar_numero(num_str: str) -> str:
     """Remove parênteses e espaços do número de telefone."""
     return num_str.replace("(", "").replace(")", "").replace(" ", "")
