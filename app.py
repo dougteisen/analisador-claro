@@ -619,6 +619,7 @@ def processar_pdf(file):
             progresso.progress((i + 1) / total_paginas)
 
         placeholder.text("🔎 Extraindo dados...")
+        st.text_area("DEBUG OCR TEXTO", texto[:5000])
 
     if usou_ocr and not texto.strip():
         progresso.empty()
