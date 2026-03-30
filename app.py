@@ -694,42 +694,53 @@ def processar_pdf(file):
     3. Claude API (IA) — fallback inteligente quando OCR gera variações que
        quebram regex (acentos perdidos, layout diferente, etc.)
     """
+    import tempfile, os
+
     texto = ""
     placeholder = st.empty()
     usou_ocr = False
 
-    # FIX PDFium: ler todos os bytes antes de abrir com pdfplumber.
-    # st.file_uploader retorna um stream que pode estar no meio após
-    # leituras anteriores — seek(0) garante leitura do início,
-    # e io.BytesIO isola o pdfplumber do stream original.
+    # FIX PDFium: salvar o PDF em arquivo temporário antes de abrir com pdfplumber.
+    # O st.file_uploader retorna um stream que pode ser consumido ou ter cursor
+    # em posição incorreta, causando "PDFium: Data format error".
+    # Salvar em disco garante leitura limpa independente do estado do stream.
     file.seek(0)
-    pdf_bytes = io.BytesIO(file.read())
+    with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp:
+        tmp.write(file.read())
+        tmp_path = tmp.name
 
-    with pdfplumber.open(pdf_bytes) as pdf:
-        total_paginas = len(pdf.pages)
-        progresso = st.progress(0)
+    try:
+        with pdfplumber.open(tmp_path) as pdf:
+            total_paginas = len(pdf.pages)
+            progresso = st.progress(0)
 
-        for i, page in enumerate(pdf.pages):
-            placeholder.text(f"📄 Processando página {i+1} de {total_paginas}...")
+            for i, page in enumerate(pdf.pages):
+                placeholder.text(f"📄 Processando página {i+1} de {total_paginas}...")
 
-            t = page.extract_text()
+                t = page.extract_text()
 
-            if t and t.strip():
-                texto += t + "\n"
-            else:
-                if not usou_ocr:
-                    usou_ocr = True
-                    placeholder.text(f"🔍 PDF de imagem — aplicando OCR (página {i+1})...")
+                if t and t.strip():
+                    texto += t + "\n"
+                else:
+                    if not usou_ocr:
+                        usou_ocr = True
+                        placeholder.text(f"🔍 PDF de imagem — aplicando OCR (página {i+1})...")
 
-                img_buf = io.BytesIO()
-                page.to_image(resolution=300).original.save(img_buf, format="PNG")
-                texto_ocr = extrair_texto_com_ocr(img_buf.getvalue())
-                texto += texto_ocr + "\n"
+                    img_buf = io.BytesIO()
+                    page.to_image(resolution=300).original.save(img_buf, format="PNG")
+                    texto_ocr = extrair_texto_com_ocr(img_buf.getvalue())
+                    texto += texto_ocr + "\n"
 
+                progresso.progress((i + 1) / total_paginas)
 
-            progresso.progress((i + 1) / total_paginas)
+            placeholder.text("🔎 Extraindo dados...")
 
-        placeholder.text("🔎 Extraindo dados...")
+    finally:
+        # Sempre limpar o arquivo temporário, mesmo em caso de erro
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
 
     if usou_ocr and not texto.strip():
         progresso.empty()
