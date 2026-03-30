@@ -698,7 +698,14 @@ def processar_pdf(file):
     placeholder = st.empty()
     usou_ocr = False
 
-    with pdfplumber.open(file) as pdf:
+    # FIX PDFium: ler todos os bytes antes de abrir com pdfplumber.
+    # st.file_uploader retorna um stream que pode estar no meio após
+    # leituras anteriores — seek(0) garante leitura do início,
+    # e io.BytesIO isola o pdfplumber do stream original.
+    file.seek(0)
+    pdf_bytes = io.BytesIO(file.read())
+
+    with pdfplumber.open(pdf_bytes) as pdf:
         total_paginas = len(pdf.pages)
         progresso = st.progress(0)
 
@@ -718,6 +725,7 @@ def processar_pdf(file):
                 page.to_image(resolution=300).original.save(img_buf, format="PNG")
                 texto_ocr = extrair_texto_com_ocr(img_buf.getvalue())
                 texto += texto_ocr + "\n"
+
 
             progresso.progress((i + 1) / total_paginas)
 
