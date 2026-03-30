@@ -530,53 +530,44 @@ def extrair_pacote_e_passaporte(blocos: dict) -> dict:
         }
     return resultado
 
-def extrair_detalhamento(blocos: dict) -> dict:
-    mapa = {}
-    for linha, bloco in blocos.items():
+def extrair_detalhamento(blocos: dict, texto: str) -> dict:
+    """
+    Nova versão robusta para PDFs imagem da Claro
+    """
+
+    resultado = {}
+
+    # 🔹 1. INTERNET GLOBAL (pega todos os subtotais)
+    internet_vals = re.findall(r"Subtotal\s+([\d\.]+,\d+)", texto)
+
+    # 🔹 2. MINUTOS GLOBAL
+    minutos_vals = re.findall(r"TOTAL\s+(\d+min\d+s)", texto)
+
+    # 🔹 3. fallback minutos simples
+    if not minutos_vals:
+        minutos_vals = re.findall(r"(\d+min\d+s)", texto)
+
+    linhas = list(blocos.keys())
+
+    for i, linha in enumerate(linhas):
+
         internet = "0"
-
-        # Estratégia 1: âncora em "Serviços (Torpedos" + linha "Internet X"
-        # Funciona em PDFs digitais onde a seção está bem estruturada
-        m = re.search(
-            r"Servi[çc]os\s*\(Torpedos.*?^Internet\s+([\d\.]+[,\.][\d]+)\s+0[,\.]00",
-            bloco, re.DOTALL | re.MULTILINE | re.IGNORECASE
-        )
-        if m:
-            internet = m.group(1)
-        else:
-            # Estratégia 2: linha "Internet X,XXX 0,00" sem exigir âncora
-            # Mais tolerante a variações de OCR
-            m = re.search(
-                r"^Internet\s+([\d\.]+[,\.][\d]+)\s+0[,\.]00",
-                bloco, re.MULTILINE | re.IGNORECASE
-            )
-            if m:
-                internet = m.group(1)
-            else:
-                # Estratégia 3: Subtotal após seção Internet (ignora Subtotal 0,00 do roaming)
-                m = re.search(
-                    r"Internet\s+[\d\.,]+.*?Subtotal\s+([\d\.]+[,\.][\d]+)\s+0[,\.]00",
-                    bloco, re.DOTALL | re.IGNORECASE
-                )
-                if m:
-                    try:
-                        val = float(m.group(1).replace(".", "").replace(",", "."))
-                        if val > 0:
-                            internet = m.group(1)
-                    except (ValueError, TypeError):
-                        pass
-
-        # Minutos: "Xmin Ys", "Xmin", "Xs" — tolerante a variações OCR
         minutos = "0"
-        m = re.search(r"TOTAL\s+([\d]+min[\d]*s?|[\d]+s)", bloco)
-        if m:
-            minutos = m.group(1)
 
-        mapa[linha] = {
+        # INTERNET
+        if i < len(internet_vals):
+            internet = internet_vals[i]
+
+        # MINUTOS
+        if i < len(minutos_vals):
+            minutos = minutos_vals[i]
+
+        resultado[linha] = {
             "Internet (MB)": internet,
             "Minutos": minutos
         }
-    return mapa
+
+    return resultado
 
 def to_float(valor) -> float:
     # FIX #2: except específico
@@ -643,7 +634,7 @@ def processar_pdf(file):
     blocos = extrair_blocos_por_linha(texto)
 
     mensalidades = extrair_mensalidades(blocos)
-    detalhamento = extrair_detalhamento(blocos)
+    detalhamento = extrair_detalhamento(blocos, texto)
     pacotes = extrair_pacote_e_passaporte(blocos)
 
     progresso.empty()
