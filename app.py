@@ -690,9 +690,19 @@ Regras:
         })
 
     try:
+        # Buscar chave Anthropic nos secrets do Streamlit
+        try:
+            anthropic_key = st.secrets["ANTHROPIC_API_KEY"]
+        except Exception:
+            anthropic_key = None
+
+        headers = {"Content-Type": "application/json", "anthropic-version": "2023-06-01"}
+        if anthropic_key:
+            headers["x-api-key"] = anthropic_key
+
         resp = requests.post(
             "https://api.anthropic.com/v1/messages",
-            headers={"Content-Type": "application/json"},
+            headers=headers,
             json={
                 "model": "claude-sonnet-4-20250514",
                 "max_tokens": 2000,
@@ -701,6 +711,7 @@ Regras:
             timeout=120
         )
         if resp.status_code != 200:
+            st.error(f"❌ API Anthropic retornou erro {resp.status_code}: {resp.text[:300]}")
             return None
         data = resp.json()
         texto_resposta = "".join(
@@ -708,11 +719,10 @@ Regras:
         )
         texto_resposta = re.sub(r"```json|```", "", texto_resposta).strip()
         return json.loads(texto_resposta)
-    except Exception:
+    except Exception as e:
+        st.error(f"❌ Erro na chamada à API Anthropic: {type(e).__name__}: {e}")
         return None
 
-
-def processar_pdf(file):
     """
     Processa PDF da Claro com 2 estratégias:
     1. PDF digital  → pdfplumber + regex (texto nativo, rápido e preciso)
