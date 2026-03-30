@@ -376,39 +376,6 @@ def extrair_texto_com_ocr(img_bytes: bytes) -> str:
 
 # ===== UTILITÁRIOS =====
 
-def extrair_valores_por_linha(texto: str) -> list:
-    import re
-    
-    # pega valores tipo 29,90 / 39,90 / 59,90
-    valores = re.findall(r"\b\d{2,3},\d{2}\b", texto)
-    
-    # remove duplicados mantendo ordem
-    valores_unicos = []
-    for v in valores:
-        if v not in valores_unicos:
-            valores_unicos.append(v)
-    
-    return valores_unicos
-def extrair_minutos_total(texto: str) -> str:
-    import re
-    
-    match = re.search(r"(\d+)\s*min", texto.lower())
-    if match:
-        return f"{match.group(1)}min"
-    
-    return "0"
-
-def extrair_internet_total(texto: str) -> float:
-    import re
-    
-    matches = re.findall(r"(\d+[\.,]?\d*)\s*GB", texto, re.IGNORECASE)
-    
-    if matches:
-        return float(matches[0].replace(",", "."))
-    
-    return 0
-
-
 def normalizar_numero(num_str: str) -> str:
     """Remove parênteses e espaços do número de telefone."""
     return num_str.replace("(", "").replace(")", "").replace(" ", "")
@@ -435,6 +402,14 @@ def extrair_vencimento(texto: str) -> str:
         return match.group(1)
     return ""
 
+def normalizar_para_comparacao(texto: str) -> str:
+    """
+    Normaliza texto removendo acentos para comparações robustas.
+    Útil para lidar com variações de OCR em texto português.
+    """
+    import unicodedata
+    return unicodedata.normalize('NFKD', texto).encode('ASCII', 'ignore').decode('ASCII').upper()
+
 def extrair_linhas(texto: str) -> list:
     # Padrão principal: (11) 98936 0484
     linhas = re.findall(r"\(\d{2}\)\s\d{5}\s\d{4}", texto)
@@ -448,22 +423,43 @@ def extrair_linhas(texto: str) -> list:
             lista.append(num)
     return lista
 
+# Padrão de divisão de blocos — tolerante a variações de acentuação do OCR
+# Cobre: LIGAÇÕES/LIGACOES, SERVIÇOS/SERVICOS, com ou sem acento
+_PADRAO_DIVISOR_BLOCO = re.compile(
+    r"DETALHAMENTO\s+DE\s+LIGA[CÇ][OÕ0]ES\s+E\s+SERVI[CÇ]OS\s+DO\s+CELULAR",
+    re.IGNORECASE
+)
+
 def extrair_blocos_por_linha(texto: str) -> dict:
     """
     Divide o texto em blocos por linha telefônica.
-    Suporta PDFs digitais e texto OCR (com variações de espaçamento).
+    Tolerante a variações de acentuação do OCR (LIGACOES vs LIGAÇÕES, etc).
     """
-    blocos = re.split(r"DETALHAMENTO DE LIGAÇÕES E SERVIÇOS DO CELULAR", texto)
+    # Estratégia 1: split tolerante a acentos (cobre OCR e PDF digital)
+    blocos = _PADRAO_DIVISOR_BLOCO.split(texto)
+
+    # Fallback: se o split não funcionou, tenta com texto normalizado (sem acentos)
+    if len(blocos) <= 1:
+        texto_norm = normalizar_para_comparacao(texto)
+        posicoes = [m.start() for m in re.finditer(
+            r"DETALHAMENTO\s+DE\s+LIGACOES\s+E\s+SERVICOS\s+DO\s+CELULAR", texto_norm
+        )]
+        if posicoes:
+            blocos = [texto[s:e] for s, e in zip(
+                [0] + posicoes,
+                posicoes + [len(texto)]
+            )]
+
     resultado = {}
     for bloco in blocos:
         # Padrão principal com parênteses
-        num = re.search(r"\(\d{2}\)\s\d{5}\s\d{4}", bloco)
+        num = re.search(r"\(\d{2}\)\s*\d{5}\s*\d{4}", bloco)
         if num:
             chave = normalizar_numero(num.group(0))
             resultado[chave] = bloco
         else:
             # Fallback: número sem parênteses (variação OCR)
-            num = re.search(r"^\s*\d{2}\s\d{5}\s\d{4}", bloco, re.MULTILINE)
+            num = re.search(r"^\s*\d{2}\s+\d{5}\s+\d{4}", bloco, re.MULTILINE)
             if num:
                 chave = normalizar_numero(num.group(0))
                 resultado[chave] = bloco
@@ -563,47 +559,55 @@ def extrair_pacote_e_passaporte(blocos: dict) -> dict:
         }
     return resultado
 
-def extrair_detalhamento(blocos: dict, texto: str) -> dict:
-    """
-    Nova versão robusta para PDFs imagem da Claro
-    """
-
-    resultado = {}
-
-    # 🔹 1. INTERNET GLOBAL (pega todos os subtotais)
-    internet_vals = re.findall(r"Subtotal\s+([\d\.]+,\d+)", texto)
-
-    # 🔹 2. MINUTOS GLOBAL
-    minutos_vals = re.findall(r"TOTAL\s+(\d+min\d+s)", texto)
-
-    # 🔹 3. fallback minutos simples
-    if not minutos_vals:
-        minutos_vals = re.findall(r"(\d+min\d+s)", texto)
-
-    linhas = list(blocos.keys())
-
-    for i, linha in enumerate(linhas):
-
+def extrair_detalhamento(blocos: dict) -> dict:
+    mapa = {}
+    for linha, bloco in blocos.items():
         internet = "0"
+
+        # Estratégia 1: âncora em "Serviços (Torpedos" + linha "Internet X"
+        # Funciona em PDFs digitais onde a seção está bem estruturada
+        m = re.search(
+            r"Servi[çc]os\s*\(Torpedos.*?^Internet\s+([\d\.]+[,\.][\d]+)\s+0[,\.]00",
+            bloco, re.DOTALL | re.MULTILINE | re.IGNORECASE
+        )
+        if m:
+            internet = m.group(1)
+        else:
+            # Estratégia 2: linha "Internet X,XXX 0,00" sem exigir âncora
+            # Mais tolerante a variações de OCR
+            m = re.search(
+                r"^Internet\s+([\d\.]+[,\.][\d]+)\s+0[,\.]00",
+                bloco, re.MULTILINE | re.IGNORECASE
+            )
+            if m:
+                internet = m.group(1)
+            else:
+                # Estratégia 3: Subtotal após seção Internet (ignora Subtotal 0,00 do roaming)
+                m = re.search(
+                    r"Internet\s+[\d\.,]+.*?Subtotal\s+([\d\.]+[,\.][\d]+)\s+0[,\.]00",
+                    bloco, re.DOTALL | re.IGNORECASE
+                )
+                if m:
+                    try:
+                        val = float(m.group(1).replace(".", "").replace(",", "."))
+                        if val > 0:
+                            internet = m.group(1)
+                    except (ValueError, TypeError):
+                        pass
+
+        # Minutos: "Xmin Ys", "Xmin", "Xs" — tolerante a variações OCR
         minutos = "0"
+        m = re.search(r"TOTAL\s+([\d]+min[\d]*s?|[\d]+s)", bloco)
+        if m:
+            minutos = m.group(1)
 
-        # INTERNET
-        if i < len(internet_vals):
-            internet = internet_vals[i]
-
-        # MINUTOS
-        if i < len(minutos_vals):
-            minutos = minutos_vals[i]
-
-        resultado[linha] = {
+        mapa[linha] = {
             "Internet (MB)": internet,
             "Minutos": minutos
         }
-
-    return resultado
+    return mapa
 
 def to_float(valor) -> float:
-    # FIX #2: except específico
     try:
         return float(str(valor).replace(".", "").replace(",", "."))
     except (ValueError, TypeError):
@@ -613,13 +617,82 @@ def extrair_gb_pacote(pacote: str) -> int:
     m = re.search(r"(\d+)\s*GB", str(pacote))
     return int(m.group(1)) if m else 0
 
+# ===== ANÁLISE VIA CLAUDE API (fallback inteligente para OCR) =====
+
+def analisar_blocos_com_ia(texto_ocr: str) -> list[dict] | None:
+    """
+    Usa o Claude API para extrair dados estruturados do texto OCR bruto.
+    Retorna lista de dicts com os campos de cada linha, ou None em caso de erro.
+    Ativado quando o OCR foi usado E os regex falharam (blocos vazios).
+    """
+    import json, requests
+
+    prompt = f"""Você é um extrator de dados de faturas telefônicas da Claro Empresas.
+Abaixo está o texto bruto extraído via OCR de uma fatura PDF. O texto pode ter erros de acentuação, espaçamento irregular ou caracteres confusos — isso é normal em OCR.
+
+Extraia os dados de CADA linha telefônica presente no texto e retorne SOMENTE um JSON válido, sem nenhum texto adicional antes ou depois.
+
+Formato esperado (array de objetos):
+[
+  {{
+    "linha": "11989360484",
+    "pacote": "Claro Pós 10GB",
+    "mensalidade_total": "44,99",
+    "internet_mb": "6948,502",
+    "minutos": "26min12s",
+    "passaporte": "-",
+    "valor_passaporte": "0"
+  }}
+]
+
+Regras:
+- "linha": número com 11 dígitos, sem espaços ou parênteses
+- "pacote": nome completo do plano (ex: "Claro Pós 10GB", "Claro Pós 20GB", "Plano de Internet Wi-Fi 50GB")
+- "mensalidade_total": valor do TOTAL da linha em reais, apenas números e vírgula (ex: "44,99")
+- "internet_mb": total de Mbytes utilizados de Internet (some linha Internet + meses anteriores se houver), apenas números e vírgula/ponto
+- "minutos": total de minutos/segundos no formato original (ex: "26min12s", "0")
+- "passaporte": nome do passaporte se existir (ex: "Claro Passaporte Americas 5GB"), caso contrário "-"
+- "valor_passaporte": valor do passaporte em reais (ex: "14,99"), caso contrário "0"
+- Se um campo não for encontrado, use "" para string e "0" para números
+
+TEXTO DA FATURA:
+{texto_ocr[:8000]}
+"""
+
+    try:
+        resp = requests.post(
+            "https://api.anthropic.com/v1/messages",
+            headers={"Content-Type": "application/json"},
+            json={
+                "model": "claude-sonnet-4-20250514",
+                "max_tokens": 1000,
+                "messages": [{"role": "user", "content": prompt}]
+            },
+            timeout=30
+        )
+        if resp.status_code != 200:
+            return None
+
+        data = resp.json()
+        texto_resposta = "".join(
+            bloco["text"] for bloco in data.get("content", [])
+            if bloco.get("type") == "text"
+        )
+
+        # Limpar fences markdown se presentes
+        texto_resposta = re.sub(r"```json|```", "", texto_resposta).strip()
+        return json.loads(texto_resposta)
+
+    except Exception:
+        return None
+
 def processar_pdf(file):
     """
-    Processa um PDF da Claro extraindo texto por duas estratégias:
-    1. pdfplumber (PDFs com texto digital) — rápido e preciso
-    2. Google Vision OCR (PDFs de imagem escaneados) — fallback por página
-    FIX 4/8: barra de progresso avança em TODAS as páginas, não só nas de OCR
-    FIX 7: texto concatenado por página mantém contexto correto
+    Processa um PDF da Claro com 3 camadas de extração:
+    1. pdfplumber (PDFs digitais) — rápido e preciso
+    2. Google Vision OCR (PDFs de imagem) — por página
+    3. Claude API (IA) — fallback inteligente quando OCR gera variações que
+       quebram regex (acentos perdidos, layout diferente, etc.)
     """
     texto = ""
     placeholder = st.empty()
@@ -635,24 +708,20 @@ def processar_pdf(file):
             t = page.extract_text()
 
             if t and t.strip():
-                # PDF com texto digital — extração direta
                 texto += t + "\n"
             else:
-                # PDF de imagem — aplica OCR via Google Vision
                 if not usou_ocr:
                     usou_ocr = True
-                    placeholder.text(f"🔍 PDF de imagem detectado — aplicando OCR na página {i+1}...")
+                    placeholder.text(f"🔍 PDF de imagem — aplicando OCR (página {i+1})...")
 
                 img_buf = io.BytesIO()
                 page.to_image(resolution=300).original.save(img_buf, format="PNG")
                 texto_ocr = extrair_texto_com_ocr(img_buf.getvalue())
                 texto += texto_ocr + "\n"
 
-            # FIX 4: progresso avança para TODA página, não só as de OCR
             progresso.progress((i + 1) / total_paginas)
 
         placeholder.text("🔎 Extraindo dados...")
-        st.text_area("DEBUG OCR TEXTO", texto[:5000])
 
     if usou_ocr and not texto.strip():
         progresso.empty()
@@ -667,37 +736,54 @@ def processar_pdf(file):
     linhas = extrair_linhas(texto)
     blocos = extrair_blocos_por_linha(texto)
 
-    mensalidades = extrair_mensalidades(blocos)
-    detalhamento = extrair_detalhamento(blocos, texto)
-    pacotes = extrair_pacote_e_passaporte(blocos)
-    valores = extrair_valores_por_linha(texto)
-    minutos_total = extrair_minutos_total(texto)
-    internet_total = extrair_internet_total(texto)
+    # ── Camada 3: IA como fallback quando OCR gerou texto mas blocos falharam ──
+    # Caso típico: OCR removeu acentos → split "LIGAÇÕES" não encontrou "LIGACOES"
+    usar_ia = usou_ocr and linhas and len(blocos) == 0
+    dados_ia = None
+
+    if usar_ia:
+        placeholder.text("🤖 Ativando análise por IA (texto OCR com variações)...")
+        dados_ia = analisar_blocos_com_ia(texto)
 
     progresso.empty()
     placeholder.empty()
 
-    dados = []
-    for i, linha in enumerate(linhas):
-        # 🔥 NOVA LÓGICA
-        if i < len(valores):
-            valor_plano = float(valores[i].replace(",", "."))
-        else:
-            valor_plano = 0
-
-        valor_passaporte = to_float(pacotes.get(linha, {}).get("Valor Passaporte", "0"))
-        total = valor_plano + valor_passaporte
-
-        dados.append({
-            "Linha": linha,
-            "Internet (MB)": internet_total / len(linhas) if linhas else 0,
-            "Pacote de dados": pacotes.get(linha, {}).get("Pacote", "-"),
-            "Mensalidade": f"R$ {valor_plano:.2f}".replace(".", ","),
-            "Passaporte": pacotes.get(linha, {}).get("Passaporte", "-"),
-            "Mensalidade Passaporte": f"R$ {valor_passaporte:.2f}".replace(".", ",") if valor_passaporte else "-",
-            "Total por linha": f"R$ {total:.2f}".replace(".", ","),
-            "Minutos": minutos_total if i == 0 else "0"
-        })
+    # ── Montar dados ──
+    if dados_ia:
+        dados = []
+        for item in dados_ia:
+            total = to_float(item.get("mensalidade_total", "0"))
+            valor_pass = to_float(item.get("valor_passaporte", "0"))
+            valor_plano = total - valor_pass
+            dados.append({
+                "Linha": item.get("linha", ""),
+                "Internet (MB)": item.get("internet_mb", "0"),
+                "Pacote de dados": item.get("pacote", "-"),
+                "Mensalidade": f"R$ {valor_plano:.2f}".replace(".", ","),
+                "Passaporte": item.get("passaporte", "-"),
+                "Mensalidade Passaporte": f"R$ {valor_pass:.2f}".replace(".", ",") if valor_pass else "-",
+                "Total por linha": f"R$ {total:.2f}".replace(".", ","),
+                "Minutos": item.get("minutos", "0"),
+            })
+    else:
+        mensalidades = extrair_mensalidades(blocos)
+        detalhamento = extrair_detalhamento(blocos)
+        pacotes = extrair_pacote_e_passaporte(blocos)
+        dados = []
+        for linha in linhas:
+            total = to_float(mensalidades.get(linha, "0"))
+            valor_passaporte = to_float(pacotes.get(linha, {}).get("Valor Passaporte", "0"))
+            valor_plano = total - valor_passaporte
+            dados.append({
+                "Linha": linha,
+                "Internet (MB)": detalhamento.get(linha, {}).get("Internet (MB)", "0"),
+                "Pacote de dados": pacotes.get(linha, {}).get("Pacote", "-"),
+                "Mensalidade": f"R$ {valor_plano:.2f}".replace(".", ","),
+                "Passaporte": pacotes.get(linha, {}).get("Passaporte", "-"),
+                "Mensalidade Passaporte": f"R$ {valor_passaporte:.2f}".replace(".", ",") if valor_passaporte else "-",
+                "Total por linha": f"R$ {total:.2f}".replace(".", ","),
+                "Minutos": detalhamento.get(linha, {}).get("Minutos", "0"),
+            })
 
     df = pd.DataFrame(dados)
 
