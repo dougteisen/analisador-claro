@@ -629,48 +629,65 @@ def extrair_gb_pacote(pacote: str) -> int:
 
 # ===== ANÁLISE VIA CLAUDE API (fallback inteligente para OCR) =====
 
-def analisar_blocos_com_ia(texto_ocr: str) -> list[dict] | None:
+# ===== ANÁLISE VIA CLAUDE VISION API (PDFs de imagem) =====
+
+def analisar_pdf_imagem_com_ia(pdf_bytes: bytes) -> list[dict] | None:
     """
-    Usa o Claude API para extrair dados estruturados do texto OCR bruto.
-    Ativado sempre que OCR foi necessário (PDFs de imagem).
-    Retorna lista de dicts com os campos de cada linha, ou None em caso de erro.
+    Converte páginas do PDF em imagens JPEG e envia ao Claude Vision API.
+    Claude lê as imagens diretamente como um humano — sem OCR intermediário.
+    Elimina todos os problemas de acentuação/layout do OCR.
     """
-    import json, requests
+    import json, requests, base64
 
-    prompt = f"""Você é um extrator de dados de faturas telefônicas da Claro Empresas (Brasil).
-O texto abaixo foi extraído via OCR de uma fatura PDF escaneada. Pode haver erros de acentuação (ex: LIGACOES em vez de LIGAÇÕES), espaçamentos irregulares, e colunas de tabela colapsadas em uma linha só.
+    try:
+        imgs = _pdf2image_convert(pdf_bytes, dpi=150)
+    except Exception:
+        return None
 
-Extraia os dados de CADA linha telefônica presente no texto.
-Cada linha começa com "DETALHAMENTO DE LIGACOES" ou "DETALHAMENTO DE LIGAÇÕES" seguido do número no formato (11) 98936 0484.
+    def img_to_b64(img):
+        buf = io.BytesIO()
+        img.save(buf, format="JPEG", quality=85)
+        return base64.b64encode(buf.getvalue()).decode()
 
-Retorne SOMENTE um array JSON válido, sem texto antes ou depois, sem markdown.
+    content = [
+        {
+            "type": "text",
+            "text": """Você é um extrator de dados de faturas telefônicas da Claro Empresas (Brasil).
+Analise TODAS as imagens desta fatura e extraia os dados de CADA linha telefônica.
+Cada linha possui uma seção "DETALHAMENTO DE LIGAÇÕES E SERVIÇOS DO CELULAR (XX) XXXXX XXXX".
 
-Formato:
+Retorne SOMENTE um array JSON válido, sem nenhum texto antes ou depois, sem markdown.
+
+Formato exato:
 [
-  {{
+  {
     "linha": "11989360484",
     "pacote": "Claro Pós 10GB",
     "mensalidade_total": "44,99",
-    "internet_mb": "6948,502",
+    "internet_mb": "6948502",
     "minutos": "26min12s",
     "passaporte": "-",
     "valor_passaporte": "0"
-  }}
+  }
 ]
 
-Regras importantes:
-- "linha": 11 dígitos sem espaços/parênteses (DDD + número)
-- "pacote": nome do plano individual da linha (ex: "Claro Pós 10GB", "Claro Pós 20GB"). NÃO use o nome da oferta conjunta.
-- "mensalidade_total": valor do TOTAL da LINHA (não o total geral da fatura). Cada linha tem seu próprio TOTAL logo após suas cobranças individuais.
-- "internet_mb": Mbytes de Internet utilizados nessa linha. Some "Internet" + "Internet - meses anteriores" se houver. Use apenas números e vírgula.
-- "minutos": duração total de ligações no formato original (ex: "26min12s", "0")
+Regras:
+- "linha": DDD + número, 11 dígitos contínuos, sem espaços ou parênteses
+- "pacote": nome do plano individual (ex: "Claro Pós 10GB", "Claro Pós 20GB")
+- "mensalidade_total": TOTAL daquela seção DETALHAMENTO (não o total geral da fatura da primeira página)
+- "internet_mb": Mbytes de Internet da linha — some "Internet" + "Internet – meses anteriores". Número inteiro sem ponto de milhar (ex: "6948502")
+- "minutos": total de ligações (ex: "26min12s", "46min36s", "0")
 - "passaporte": nome do passaporte se existir, senão "-"
-- "valor_passaporte": valor do passaporte em reais, senão "0"
-- ATENÇÃO: a fatura pode ter um resumo geral na primeira página com totais globais — ignore esses valores globais, use apenas os totais individuais de cada seção DETALHAMENTO.
-
-TEXTO DA FATURA (OCR):
-{texto_ocr[:10000]}
+- "valor_passaporte": valor do passaporte com vírgula (ex: "14,99"), senão "0"
 """
+        }
+    ]
+
+    for img in imgs:
+        content.append({
+            "type": "image",
+            "source": {"type": "base64", "media_type": "image/jpeg", "data": img_to_b64(img)}
+        })
 
     try:
         resp = requests.post(
@@ -679,155 +696,130 @@ TEXTO DA FATURA (OCR):
             json={
                 "model": "claude-sonnet-4-20250514",
                 "max_tokens": 2000,
-                "messages": [{"role": "user", "content": prompt}]
+                "messages": [{"role": "user", "content": content}]
             },
-            timeout=45
+            timeout=120
         )
         if resp.status_code != 200:
             return None
-
         data = resp.json()
         texto_resposta = "".join(
-            bloco["text"] for bloco in data.get("content", [])
-            if bloco.get("type") == "text"
+            b["text"] for b in data.get("content", []) if b.get("type") == "text"
         )
         texto_resposta = re.sub(r"```json|```", "", texto_resposta).strip()
         return json.loads(texto_resposta)
-
     except Exception:
         return None
 
+
 def processar_pdf(file):
     """
-    Processa um PDF da Claro com 3 camadas de extração:
-    1. pdfplumber.extract_text() — PDFs digitais, rápido e preciso
-    2. pdf2image + Google Vision OCR — PDFs de imagem (sem usar pdfium)
-    3. Claude API (IA) — fallback quando OCR gera variações que quebram regex
+    Processa PDF da Claro com 2 estratégias:
+    1. PDF digital  → pdfplumber + regex (texto nativo, rápido e preciso)
+    2. PDF imagem   → pdf2image + Claude Vision API (lê páginas como imagens)
+                      Sem OCR intermediário, sem regex para PDFs escaneados.
     """
-    import tempfile, os
-
-    texto = ""
     placeholder = st.empty()
-    usou_ocr = False
-    imagens_pdf = None   # carregadas lazy apenas se necessário
-
-    # Ler bytes uma vez — evita qualquer problema de stream/cursor
     file.seek(0)
     pdf_bytes = file.read()
 
+    # Detectar tipo: checar se primeiras páginas têm texto extraível
     with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
         total_paginas = len(pdf.pages)
+        paginas_com_texto = sum(
+            1 for p in pdf.pages[:3]
+            if p.extract_text() and p.extract_text().strip()
+        )
+    eh_imagem = (paginas_com_texto == 0)
+
+    if not eh_imagem:
+        # ── PDF digital: extração por pdfplumber + regex ──
+        texto = ""
         progresso = st.progress(0)
-
-        for i, page in enumerate(pdf.pages):
-            placeholder.text(f"📄 Processando página {i+1} de {total_paginas}...")
-
-            t = page.extract_text()
-
-            if t and t.strip():
-                # PDF digital — extração direta, sem pdfium
-                texto += t + "\n"
-            else:
-                # PDF de imagem — converter com pdf2image (poppler, não pdfium)
-                if not usou_ocr:
-                    usou_ocr = True
-                    placeholder.text(f"🔍 PDF de imagem — convertendo com pdf2image...")
-
-                    if _PDF2IMAGE_DISPONIVEL:
-                        # Converte todas as páginas de uma vez (mais eficiente)
-                        imagens_pdf = _pdf2image_convert(pdf_bytes, dpi=250)
-                    else:
-                        # Fallback: to_image do pdfplumber (pode falhar no Cloud)
-                        imagens_pdf = None
-
-                if imagens_pdf is not None:
-                    img = imagens_pdf[i]
-                    img_buf = io.BytesIO()
-                    img.save(img_buf, format="PNG")
-                    placeholder.text(f"🔎 OCR — página {i+1} de {total_paginas}...")
-                    texto_ocr = extrair_texto_com_ocr(img_buf.getvalue())
-                    texto += texto_ocr + "\n"
-                else:
-                    # Último recurso: to_image (pdfium)
-                    img_buf = io.BytesIO()
-                    page.to_image(resolution=250).original.save(img_buf, format="PNG")
-                    texto_ocr = extrair_texto_com_ocr(img_buf.getvalue())
-                    texto += texto_ocr + "\n"
-
-            progresso.progress((i + 1) / total_paginas)
-
+        with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
+            for i, page in enumerate(pdf.pages):
+                placeholder.text(f"📄 Processando página {i+1} de {total_paginas}...")
+                t = page.extract_text()
+                if t and t.strip():
+                    texto += t + "\n"
+                progresso.progress((i + 1) / total_paginas)
         placeholder.text("🔎 Extraindo dados...")
-
-    if usou_ocr and not texto.strip():
         progresso.empty()
         placeholder.empty()
-        raise ValueError(
-            "Não foi possível extrair texto do PDF. "
-            "Verifique se o Google Vision está configurado nos secrets."
-        )
 
-        progresso.empty()
-        placeholder.empty()
-        raise ValueError(
-            "Não foi possível extrair texto do PDF. "
-            "Verifique se o Google Vision está configurado nos secrets."
-        )
-
-    cliente = extrair_cliente(texto)
-    vencimento = extrair_vencimento(texto)
-    linhas = extrair_linhas(texto)
-    blocos = extrair_blocos_por_linha(texto)
-
-    # ── Camada 3: IA para QUALQUER PDF que usou OCR ──────────────────────────
-    # Regex são frágeis com texto OCR (acentos perdidos, colunas colapsadas,
-    # espaçamentos variáveis). Se o Vision foi usado, a IA interpreta o texto
-    # bruto diretamente — mais confiável que tentar corrigir regex para cada
-    # variação possível de OCR.
-    # Para PDFs digitais (usou_ocr=False), regex continuam sendo usados pois
-    # o texto é limpo e estruturado.
-    dados_ia = None
-    if usou_ocr and texto.strip():
-        placeholder.text("🤖 Analisando fatura com IA...")
-        dados_ia = analisar_blocos_com_ia(texto)
-
-    progresso.empty()
-    placeholder.empty()
-
-    # ── Montar dados ──
-    if dados_ia:
-        dados = []
-        for item in dados_ia:
-            total = to_float(item.get("mensalidade_total", "0"))
-            valor_pass = to_float(item.get("valor_passaporte", "0"))
-            valor_plano = total - valor_pass
-            dados.append({
-                "Linha": item.get("linha", ""),
-                "Internet (MB)": item.get("internet_mb", "0"),
-                "Pacote de dados": item.get("pacote", "-"),
-                "Mensalidade": f"R$ {valor_plano:.2f}".replace(".", ","),
-                "Passaporte": item.get("passaporte", "-"),
-                "Mensalidade Passaporte": f"R$ {valor_pass:.2f}".replace(".", ",") if valor_pass else "-",
-                "Total por linha": f"R$ {total:.2f}".replace(".", ","),
-                "Minutos": item.get("minutos", "0"),
-            })
-    else:
+        cliente   = extrair_cliente(texto)
+        vencimento = extrair_vencimento(texto)
+        linhas    = extrair_linhas(texto)
+        blocos    = extrair_blocos_por_linha(texto)
         mensalidades = extrair_mensalidades(blocos)
         detalhamento = extrair_detalhamento(blocos)
-        pacotes = extrair_pacote_e_passaporte(blocos)
+        pacotes   = extrair_pacote_e_passaporte(blocos)
+
         dados = []
         for linha in linhas:
-            total = to_float(mensalidades.get(linha, "0"))
-            valor_passaporte = to_float(pacotes.get(linha, {}).get("Valor Passaporte", "0"))
-            valor_plano = total - valor_passaporte
+            total       = to_float(mensalidades.get(linha, "0"))
+            valor_pass  = to_float(pacotes.get(linha, {}).get("Valor Passaporte", "0"))
+            valor_plano = total - valor_pass
             dados.append({
-                "Linha": linha,
-                "Internet (MB)": detalhamento.get(linha, {}).get("Internet (MB)", "0"),
-                "Pacote de dados": pacotes.get(linha, {}).get("Pacote", "-"),
-                "Mensalidade": f"R$ {valor_plano:.2f}".replace(".", ","),
-                "Passaporte": pacotes.get(linha, {}).get("Passaporte", "-"),
-                "Mensalidade Passaporte": f"R$ {valor_passaporte:.2f}".replace(".", ",") if valor_passaporte else "-",
-                "Total por linha": f"R$ {total:.2f}".replace(".", ","),
-                "Minutos": detalhamento.get(linha, {}).get("Minutos", "0"),
+                "Linha":                  linha,
+                "Internet (MB)":          detalhamento.get(linha, {}).get("Internet (MB)", "0"),
+                "Pacote de dados":        pacotes.get(linha, {}).get("Pacote", "-"),
+                "Mensalidade":            f"R$ {valor_plano:.2f}".replace(".", ","),
+                "Passaporte":             pacotes.get(linha, {}).get("Passaporte", "-"),
+                "Mensalidade Passaporte": f"R$ {valor_pass:.2f}".replace(".", ",") if valor_pass else "-",
+                "Total por linha":        f"R$ {total:.2f}".replace(".", ","),
+                "Minutos":                detalhamento.get(linha, {}).get("Minutos", "0"),
+            })
+
+    else:
+        # ── PDF imagem: Claude Vision lê as páginas diretamente ──
+        if not _PDF2IMAGE_DISPONIVEL:
+            raise ValueError("pdf2image não instalado. Adicione ao requirements.txt e poppler-utils ao packages.txt.")
+
+        placeholder.text("🖼️ PDF de imagem — analisando com IA (pode levar ~30s)...")
+        progresso = st.progress(0.1)
+
+        dados_ia = analisar_pdf_imagem_com_ia(pdf_bytes)
+
+        progresso.progress(1.0)
+        progresso.empty()
+        placeholder.empty()
+
+        if not dados_ia:
+            raise ValueError("Não foi possível extrair dados com IA. Verifique a API Anthropic.")
+
+        # Tentar extrair cliente/vencimento pelo OCR básico da capa
+        cliente = "CLIENTE"
+        vencimento = ""
+        try:
+            from google.cloud import vision as _v
+            from google.oauth2 import service_account as _sa
+            _creds = _sa.Credentials.from_service_account_info(st.secrets["GOOGLE_CREDENTIALS"])
+            _cli = _v.ImageAnnotatorClient(credentials=_creds)
+            _imgs_capa = _pdf2image_convert(pdf_bytes, dpi=120, first_page=1, last_page=1)
+            _buf = io.BytesIO(); _imgs_capa[0].save(_buf, format="PNG")
+            _resp = _cli.document_text_detection(image=_v.Image(content=_buf.getvalue()))
+            _t = _resp.full_text_annotation.text or ""
+            c = extrair_cliente(_t); v = extrair_vencimento(_t)
+            if c != "CLIENTE": cliente = c
+            if v: vencimento = v
+        except Exception:
+            pass
+
+        dados = []
+        for item in dados_ia:
+            total       = to_float(item.get("mensalidade_total", "0"))
+            valor_pass  = to_float(item.get("valor_passaporte", "0"))
+            valor_plano = total - valor_pass
+            dados.append({
+                "Linha":                  item.get("linha", ""),
+                "Internet (MB)":          str(item.get("internet_mb", "0")),
+                "Pacote de dados":        item.get("pacote", "-"),
+                "Mensalidade":            f"R$ {valor_plano:.2f}".replace(".", ","),
+                "Passaporte":             item.get("passaporte", "-"),
+                "Mensalidade Passaporte": f"R$ {valor_pass:.2f}".replace(".", ",") if valor_pass else "-",
+                "Total por linha":        f"R$ {total:.2f}".replace(".", ","),
+                "Minutos":                item.get("minutos", "0"),
             })
 
     df = pd.DataFrame(dados)
