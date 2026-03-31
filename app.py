@@ -895,33 +895,7 @@ def _parsear_json_ia(texto: str) -> dict | None:
         pass
     return None
 
-def _analisar_com_gemini(imgs: list) -> list | None:
-    """Usa Gemini 1.5 Flash (gratuito) para extrair dados das imagens."""
-    if not _GEMINI_DISPONIVEL:
-        return None
-    try:
-        # Streamlit secrets pode ser acessado como dict ou atributo
-        api_key = None
-        try:
-            api_key = st.secrets["GEMINI_API_KEY"]
-        except Exception:
-            try:
-                api_key = st.secrets["GOOGLE_GEMINI_KEY"]
-            except Exception:
-                pass
-        if not api_key:
-            return None
-        genai.configure(api_key=api_key)
-        model = genai.GenerativeModel("gemini-1.5-flash")
-        # Gemini aceita PIL Images diretamente
-        partes = [_PROMPT_FATURA] + imgs
-        resp = model.generate_content(partes)
-        return _parsear_json_ia(resp.text)
-    except Exception as e:
-        st.warning(f"⚠️ Gemini: {e}")
-        return None
-
-def _analisar_com_anthropic(imgs: list) -> dict | None:
+def processar_pdf(file):
     """Usa Claude Sonnet (pago) como fallback se Gemini não estiver configurado."""
     import requests, base64
     try:
@@ -962,37 +936,6 @@ def _analisar_com_anthropic(imgs: list) -> dict | None:
         return _parsear_json_ia(texto)
     except Exception:
         return None
-
-def analisar_pdf_imagem_com_ia(pdf_bytes: bytes) -> list | None:
-    """
-    Extrai dados de PDF de imagem usando IA com visão.
-    Tenta na ordem: Gemini (gratuito) → Anthropic (pago).
-    Basta configurar UMA das chaves nos Secrets do Streamlit:
-      GEMINI_API_KEY   → gratuito, recomendado
-      ANTHROPIC_API_KEY → pago, fallback
-    """
-    imgs = _converter_paginas(pdf_bytes)
-    if not imgs:
-        st.error("❌ Não foi possível converter as páginas do PDF em imagens.")
-        return None
-
-    # Tentar Gemini primeiro (gratuito)
-    resultado = _analisar_com_gemini(imgs)
-    if resultado:
-        return resultado
-
-    # Fallback: Anthropic
-    resultado = _analisar_com_anthropic(imgs)
-    if resultado:
-        return resultado
-
-    # Nenhuma chave configurada ou ambas falharam
-    st.error(
-        "❌ Não foi possível analisar o PDF com IA. "
-        "Verifique se **GEMINI_API_KEY** está correto nos Secrets do Streamlit Cloud."
-    )
-    return None
-
 
 def processar_pdf(file):
     """
