@@ -685,7 +685,15 @@ def _analisar_com_gemini(imgs: list) -> list | None:
     if not _GEMINI_DISPONIVEL:
         return None
     try:
-        api_key = st.secrets.get("GEMINI_API_KEY") or st.secrets.get("GOOGLE_GEMINI_KEY")
+        # Streamlit secrets pode ser acessado como dict ou atributo
+        api_key = None
+        try:
+            api_key = st.secrets["GEMINI_API_KEY"]
+        except Exception:
+            try:
+                api_key = st.secrets["GOOGLE_GEMINI_KEY"]
+            except Exception:
+                pass
         if not api_key:
             return None
         genai.configure(api_key=api_key)
@@ -694,7 +702,8 @@ def _analisar_com_gemini(imgs: list) -> list | None:
         partes = [_PROMPT_FATURA] + imgs
         resp = model.generate_content(partes)
         return _parsear_json_ia(resp.text)
-    except Exception:
+    except Exception as e:
+        st.warning(f"⚠️ Gemini: {e}")
         return None
 
 def _analisar_com_anthropic(imgs: list) -> list | None:
@@ -758,11 +767,10 @@ def analisar_pdf_imagem_com_ia(pdf_bytes: bytes) -> list | None:
     if resultado:
         return resultado
 
-    # Nenhuma chave configurada — mostrar instrução clara
+    # Nenhuma chave configurada ou ambas falharam
     st.error(
-        "❌ Nenhuma chave de IA configurada nos Secrets. "
-        "Adicione **GEMINI_API_KEY** (gratuito em aistudio.google.com) "
-        "ou **ANTHROPIC_API_KEY** nos Secrets do Streamlit Cloud."
+        "❌ Não foi possível analisar o PDF com IA. "
+        "Verifique se **GEMINI_API_KEY** está correto nos Secrets do Streamlit Cloud."
     )
     return None
 
@@ -841,7 +849,7 @@ def processar_pdf(file):
         placeholder.empty()
 
         if not dados_ia:
-            raise ValueError("Não foi possível extrair dados com IA. Verifique a API Anthropic.")
+            raise ValueError("Não foi possível extrair dados com IA. Verifique a chave GEMINI_API_KEY nos Secrets.")
 
         # Tentar extrair cliente/vencimento pelo OCR básico da capa
         cliente = "CLIENTE"
