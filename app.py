@@ -621,7 +621,32 @@ def extrair_detalhamento(blocos: dict) -> dict:
         }
     return mapa
 
-def to_float(valor) -> float:
+def _normalizar_internet_mb(valor) -> str:
+    """
+    Normaliza o campo internet_mb retornado pela IA.
+    A IA pode retornar: "6948502", "6.948.502", "6,948,502", "6948,502", "6948.502"
+    Retorna sempre uma string de inteiro sem separador de milhar.
+    """
+    s = str(valor).strip()
+    # Remove qualquer caractere que não seja dígito, ponto ou vírgula
+    s = re.sub(r"[^\d.,]", "", s)
+    if not s:
+        return "0"
+    # Se tiver vírgula como decimal (ex: "6948,502" → os últimos 3 dígitos são MB)
+    # Heurística: se a última vírgula/ponto estiver seguida de exatamente 3 dígitos,
+    # provavelmente é separador de milhar — remove. Senão, converte decimal.
+    # Caso mais seguro: remover todos os separadores que não sejam decimais.
+    # Se terminar com ",XX" ou ".XX" (2 casas), é decimal
+    # Se terminar com ",XXX" ou ".XXX" (3 casas), é milhar → remove
+    m = re.match(r"^([\d]+(?:[.,][\d]{3})*)[.,]?([\d]{0,2})$", s)
+    if m:
+        inteiro = m.group(1).replace(".", "").replace(",", "")
+        decimal = m.group(2)
+        return inteiro  # descarta decimais, queremos MB inteiro
+    # Fallback: remove todos os pontos e vírgulas e retorna o número
+    return re.sub(r"[.,]", "", s)
+
+
     try:
         return float(str(valor).replace(".", "").replace(",", "."))
     except (ValueError, TypeError):
@@ -697,7 +722,7 @@ def _analisar_com_gemini(imgs: list) -> list | None:
         if not api_key:
             return None
         genai.configure(api_key=api_key)
-        model = genai.GenerativeModel("gemini-1.5-flash")
+        model = genai.GenerativeModel("gemini-2.0-flash")
         # Gemini aceita PIL Images diretamente
         partes = [_PROMPT_FATURA] + imgs
         resp = model.generate_content(partes)
@@ -710,7 +735,11 @@ def _analisar_com_anthropic(imgs: list) -> list | None:
     """Usa Claude Sonnet (pago) como fallback se Gemini não estiver configurado."""
     import requests, base64
     try:
-        api_key = st.secrets.get("ANTHROPIC_API_KEY")
+        api_key = None
+        try:
+            api_key = st.secrets["ANTHROPIC_API_KEY"]
+        except Exception:
+            pass
         if not api_key:
             return None
 
@@ -786,14 +815,15 @@ def processar_pdf(file):
     file.seek(0)
     pdf_bytes = file.read()
 
-    # Detectar tipo: checar se primeiras páginas têm texto extraível
+    # Detectar tipo: checar se primeiras páginas têm texto extraível com conteúdo real
     with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
         total_paginas = len(pdf.pages)
-        paginas_com_texto = sum(
-            1 for p in pdf.pages[:3]
-            if p.extract_text() and p.extract_text().strip()
+        chars_extraidos = sum(
+            len((p.extract_text() or "").strip())
+            for p in pdf.pages[:3]
         )
-    eh_imagem = (paginas_com_texto == 0)
+    # Considera digital só se houver pelo menos 100 chars nas primeiras 3 páginas
+    eh_imagem = (chars_extraidos < 100)
 
     if not eh_imagem:
         # ── PDF digital: extração por pdfplumber + regex ──
@@ -876,7 +906,7 @@ def processar_pdf(file):
             valor_plano = total - valor_pass
             dados.append({
                 "Linha":                  item.get("linha", ""),
-                "Internet (MB)":          str(item.get("internet_mb", "0")),
+                "Internet (MB)":          _normalizar_internet_mb(item.get("internet_mb", "0")),
                 "Pacote de dados":        item.get("pacote", "-"),
                 "Mensalidade":            f"R$ {valor_plano:.2f}".replace(".", ","),
                 "Passaporte":             item.get("passaporte", "-"),
