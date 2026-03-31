@@ -621,22 +621,32 @@ def extrair_detalhamento(blocos: dict) -> dict:
         }
     return mapa
 
-def _normalizar_internet_mb(valor) -> str:
+def _normalizar_internet_mb_ia(valor) -> str:
     """
-    Normaliza internet_mb retornado pela IA.
-    Remove separadores de milhar (ponto ou vírgula antes de grupos de 3 dígitos).
-    Retorna string de inteiro puro. Ex: "7.526.866" → "7526866"
+    Converte internet_mb retornado pela IA para o formato do pipeline.
+
+    A Claro formata MB com 3 casas decimais separadas por vírgula:
+      ex: 7.526,866 MB  (ponto = milhar, vírgula = decimal)
+
+    O Gemini lê os pontos como milhar e retorna inteiro: 7526866
+    Este função converte de volta para o formato esperado: '7526,866'
+
+    O pipeline downstream já sabe processar esse formato:
+      '7526,866' → remove '.' → troca ',' por '.' → float 7526.866
     """
-    s = re.sub(r"[^\d.,]", "", str(valor).strip())
-    if not s:
-        return "0"
-    # Remove separadores de milhar iterativamente
-    s = re.sub(r"[.,](\d{3})(?=[.,\d]|$)", r"\1", s)
-    s = re.sub(r"[.,](\d{3})(?=[.,\d]|$)", r"\1", s)
-    # Remove decimal restante
-    s = re.sub(r"[.,]\d*$", "", s)
-    s = re.sub(r"[.,]", "", s)
-    return s or "0"
+    s = str(valor).strip()
+    # Se já tem vírgula (já no formato correto), apenas remove pontos de milhar
+    if ',' in s:
+        return s.replace('.', '')
+    # Remove tudo que não é dígito
+    s = re.sub(r'[^\d]', '', s)
+    if not s or s == '0':
+        return '0'
+    # Insere vírgula antes dos últimos 3 dígitos (padrão Claro: MB com 3 casas)
+    if len(s) > 3:
+        return s[:-3] + ',' + s[-3:]
+    else:
+        return '0,' + s.zfill(3)
 
 def to_float(valor) -> float:
     try:
@@ -687,24 +697,19 @@ CAMPO 4 — "internet_mb" ⚠️ ATENÇÃO ESPECIAL
 Na subseção "Serviços (Torpedos, Hits, Jogos, etc.) → Internet (MB)",
 localize as linhas "Internet" e "Internet – meses anteriores".
 Some os valores da coluna "Mbytes Utilizados" das DUAS linhas.
+Use o valor "Subtotal" se disponível.
 
-Exemplo real desta fatura:
-  Internet               6.948.502
-  Internet–meses ant.      578.364
-  Subtotal               7.526.866  ← use este valor (ou some manualmente)
-
-⚠️ REGRA CRÍTICA: retorne o número como INTEIRO SEM QUALQUER SEPARADOR.
-  CORRETO:   7526866
-  ERRADO:    7.526.866  (com ponto)
-  ERRADO:    7526,866   (com vírgula)
-  ERRADO:    7526.866   (com ponto decimal)
+⚠️ REGRA CRÍTICA DE FORMATO: retorne o número como INTEIRO sem separadores.
+Exemplos:
+  Fatura mostra "6.948.502" → retorne 6948502
+  Fatura mostra "578.364"   → retorne 578364
+  Subtotal "7.526.866"      → retorne 7526866
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 CAMPO 5 — "minutos"
-O tempo total de ligações nesta seção.
-Está na linha "TOTAL" no rodapé da seção, na coluna de duração.
+O tempo total de ligações nesta seção, na coluna de duração do último TOTAL.
 Formato: "26min12s", "46min36s", ou "0" se não houver ligações.
-⚠️ Cuidado: cada seção tem seu próprio TOTAL — não confunda com outros.
+⚠️ Cada seção tem seu próprio TOTAL — não confunda com outros.
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 CAMPO 6 — "passaporte"
@@ -750,13 +755,10 @@ def _parsear_json_ia(texto: str) -> list | None:
 def _analisar_com_gemini(imgs: list) -> list | None:
     """
     Usa Gemini para extrair dados das imagens.
-
-    Modelos confirmados disponíveis no free tier (verificado na conta):
+    Modelos confirmados disponíveis (free tier):
       1. gemini-2.5-flash-lite  → 10 RPM, 20 RPD
-      2. gemini-2.5-flash       →  5 RPM, 20 RPD  (fallback)
-
-    Envia TODAS as páginas em um único request para o modelo ter
-    contexto completo da fatura e não confundir seções.
+      2. gemini-2.5-flash       →  5 RPM, 20 RPD
+    Envia todas as páginas juntas para melhor contexto.
     """
     if not _GEMINI_DISPONIVEL:
         return None
@@ -776,7 +778,6 @@ def _analisar_com_gemini(imgs: list) -> list | None:
 
     import time
 
-    # Apenas modelos confirmados disponíveis na conta (sem gemini-3.1-flash-lite)
     MODELOS = [
         "gemini-2.5-flash-lite",
         "gemini-2.5-flash",
@@ -792,7 +793,6 @@ def _analisar_com_gemini(imgs: list) -> list | None:
         return unicos
 
     def _request_com_retry(model, paginas):
-        """Request com backoff em quota 429. Retorna lista, None ou 'QUOTA'."""
         for tentativa in range(3):
             try:
                 resp = model.generate_content([_PROMPT_FATURA] + paginas)
@@ -801,7 +801,7 @@ def _analisar_com_gemini(imgs: list) -> list | None:
                 err = str(e)
                 is_quota = any(x in err for x in ["429", "RESOURCE_EXHAUSTED", "quota"])
                 if is_quota and tentativa < 2:
-                    time.sleep(15 * (2 ** tentativa))  # 15s, 30s
+                    time.sleep(15 * (2 ** tentativa))
                 elif is_quota:
                     return "QUOTA"
                 else:
@@ -811,8 +811,6 @@ def _analisar_com_gemini(imgs: list) -> list | None:
     for modelo_nome in MODELOS:
         try:
             model = genai.GenerativeModel(modelo_nome)
-
-            # Envia todas as páginas juntas para melhor contexto
             resultado = _request_com_retry(model, imgs)
 
             if resultado == "QUOTA":
@@ -1024,7 +1022,7 @@ def processar_pdf(file):
             valor_plano = total - valor_pass
             dados.append({
                 "Linha":                  item.get("linha", ""),
-                "Internet (MB)":          _normalizar_internet_mb(item.get("internet_mb", "0")),
+                "Internet (MB)":          _normalizar_internet_mb_ia(item.get("internet_mb", "0")),
                 "Pacote de dados":        item.get("pacote", "-"),
                 "Mensalidade":            f"R$ {valor_plano:.2f}".replace(".", ","),
                 "Passaporte":             item.get("passaporte", "-"),
