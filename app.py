@@ -623,30 +623,42 @@ def extrair_detalhamento(blocos: dict) -> dict:
 
 def _normalizar_internet_mb_ia(valor) -> str:
     """
-    Converte internet_mb retornado pela IA para o formato do pipeline.
+    Normaliza internet_mb retornado pela IA para o formato do pipeline.
 
-    A Claro formata MB com 3 casas decimais separadas por vírgula:
-      ex: 7.526,866 MB  (ponto = milhar, vírgula = decimal)
+    O pipeline espera string no formato BR: vírgula como decimal, ponto como milhar.
+    Ex: '7526,866' → pipeline remove '.', troca ',' por '.' → float 7526.866
 
-    O Gemini lê os pontos como milhar e retorna inteiro: 7526866
-    Este função converte de volta para o formato esperado: '7526,866'
-
-    O pipeline downstream já sabe processar esse formato:
-      '7526,866' → remove '.' → troca ',' por '.' → float 7526.866
+    O Gemini pode retornar em vários formatos — todos tratados aqui:
+      '14.423,700' → '14423,700'   (BR correto, apenas remove ponto milhar)
+      '7.526.866'  → '7526,866'    (só pontos → inteiro, insere vírgula)
+      '7526866'    → '7526,866'    (inteiro puro → insere vírgula)
+      '14423.700'  → '14423,700'   (ponto decimal BR invertido → converte)
+      '946,122'    → '946,122'     (já correto)
+      '14423700'   → '14423,700'   (inteiro puro grande)
     """
+    import re as _re
     s = str(valor).strip()
-    # Se já tem vírgula (já no formato correto), apenas remove pontos de milhar
+
+    # Caso 1: tem vírgula → formato BR (ponto=milhar, vírgula=decimal)
+    # ex: '14.423,700', '946,122', '7.526,866'
     if ',' in s:
-        return s.replace('.', '')
-    # Remove tudo que não é dígito
-    s = re.sub(r'[^\d]', '', s)
-    if not s or s == '0':
+        return s.replace('.', '')  # remove ponto de milhar, mantém vírgula decimal
+
+    # Caso 2: ponto seguido de exatamente 3 dígitos no final → decimal
+    # ex: '14423.700', '7526.866', '946.122'
+    if _re.search(r'\.\d{3}$', s):
+        partes = s.rsplit('.', 1)
+        inteiro = partes[0].replace('.', '')  # remove pontos de milhar restantes
+        return inteiro + ',' + partes[1]
+
+    # Caso 3: inteiro puro (todos os pontos eram milhar, Gemini os removeu)
+    # ex: '7526866' → '7526,866' | '14423700' → '14423,700' | '946122' → '946,122'
+    s_clean = _re.sub(r'[^\d]', '', s)
+    if not s_clean or s_clean == '0':
         return '0'
-    # Insere vírgula antes dos últimos 3 dígitos (padrão Claro: MB com 3 casas)
-    if len(s) > 3:
-        return s[:-3] + ',' + s[-3:]
-    else:
-        return '0,' + s.zfill(3)
+    if len(s_clean) > 3:
+        return s_clean[:-3] + ',' + s_clean[-3:]
+    return '0,' + s_clean.zfill(3)
 
 def to_float(valor) -> float:
     try:
@@ -670,53 +682,50 @@ Para CADA seção de detalhamento encontrada, extraia os 7 campos abaixo:
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 CAMPO 1 — "linha"
-O número de telefone que aparece no cabeçalho desta seção.
-Formato: 11 dígitos sem espaços, parênteses ou hífen.
+O número de telefone no cabeçalho da seção. 11 dígitos sem espaços/parênteses.
 Exemplo: "(11) 98936 0484" → "11989360484"
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 CAMPO 2 — "pacote"
-Na subseção "Mensalidades e Pacotes Promocionais" desta seção de detalhamento,
-procure as linhas indentadas abaixo de "Oferta Conjunta Claro MIX" ou similar.
-O pacote individual é a linha que menciona GB, como:
-  • "Claro Pós 10GB"
-  • "Claro Pós 20GB"
-  • "Claro Life Ilimitado"
-  • "Claro Controle"
-NÃO use "Oferta Conjunta Claro MIX" — isso é o nome do bundle, não o plano.
+Em "Mensalidades e Pacotes Promocionais", procure o plano individual com GB:
+  • "Claro Pós 10GB", "Claro Pós 20GB", "Claro Life Ilimitado", etc.
+NÃO use "Oferta Conjunta Claro MIX" (é o bundle, não o plano).
 NÃO use "App incluso na oferta", "Aplicativos Digitais", "Pacote Mobilidade".
-Se não encontrar nenhum plano com GB, use "-".
+Se não encontrar plano com GB, use "-".
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 CAMPO 3 — "mensalidade_total"
-O valor na linha "TOTAL" ao fim da subseção "Mensalidades e Pacotes Promocionais".
-Formato: "44,99" (vírgula decimal, sem R$, sem ponto de milhar).
+Valor na linha "TOTAL" em "Mensalidades e Pacotes Promocionais".
+Formato string: "44,99" (vírgula decimal, sem R$).
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-CAMPO 4 — "internet_mb" ⚠️ ATENÇÃO ESPECIAL
-Na subseção "Serviços (Torpedos, Hits, Jogos, etc.) → Internet (MB)",
-localize as linhas "Internet" e "Internet – meses anteriores".
-Some os valores da coluna "Mbytes Utilizados" das DUAS linhas.
-Use o valor "Subtotal" se disponível.
+CAMPO 4 — "internet_mb" ⚠️ LEIA COM ATENÇÃO
+Em "Serviços (Torpedos, Hits, Jogos, etc.) → Internet (MB)", some:
+  • linha "Internet" + linha "Internet – meses anteriores" (se existir)
+  • ou use o valor "Subtotal" diretamente
 
-⚠️ REGRA CRÍTICA DE FORMATO: retorne o número como INTEIRO sem separadores.
-Exemplos:
-  Fatura mostra "6.948.502" → retorne 6948502
-  Fatura mostra "578.364"   → retorne 578364
-  Subtotal "7.526.866"      → retorne 7526866
+⚠️ REGRA DE FORMATO OBRIGATÓRIA:
+Retorne o valor EXATAMENTE como aparece na fatura, como string, preservando
+o ponto de milhar e a vírgula decimal da Claro.
+
+Exemplos do que você vai ver na fatura e como retornar:
+  Fatura mostra "6.948.502"  → retorne "6.948.502"   (sem vírgula = inteiro)
+  Fatura mostra "14.264,978" → retorne "14.264,978"  (com vírgula = decimal)
+  Fatura mostra "578.364"    → retorne "578.364"
+  Subtotal "7.526.866"       → retorne "7.526.866"
+  Subtotal "14.423.700"      → retorne "14.423.700"
+
+NÃO converta para inteiro. NÃO remova os separadores. Copie exatamente.
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 CAMPO 5 — "minutos"
-O tempo total de ligações nesta seção, na coluna de duração do último TOTAL.
-Formato: "26min12s", "46min36s", ou "0" se não houver ligações.
-⚠️ Cada seção tem seu próprio TOTAL — não confunda com outros.
+Tempo total de ligações nesta seção (coluna duração no TOTAL final).
+Formato: "26min12s", "46min36s", ou "0".
+⚠️ Cada seção tem seu próprio TOTAL — não confunda entre seções.
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-CAMPO 6 — "passaporte"
-Se houver linha "Claro Passaporte XGBX" em Mensalidades, use o nome. Senão "-".
-
-CAMPO 7 — "valor_passaporte"
-Valor em R$ do passaporte (ex: "14,99"). Senão "0".
+CAMPO 6 — "passaporte": nome do passaporte se houver, senão "-"
+CAMPO 7 — "valor_passaporte": valor R$ do passaporte (ex: "14,99"), senão "0"
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 SAÍDA: SOMENTE array JSON válido, sem markdown, sem texto antes ou depois.
@@ -726,7 +735,7 @@ SAÍDA: SOMENTE array JSON válido, sem markdown, sem texto antes ou depois.
     "linha": "11989360484",
     "pacote": "Claro Pós 10GB",
     "mensalidade_total": "44,99",
-    "internet_mb": 7526866,
+    "internet_mb": "7.526.866",
     "minutos": "26min12s",
     "passaporte": "-",
     "valor_passaporte": "0"
