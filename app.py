@@ -624,41 +624,86 @@ def extrair_detalhamento(blocos: dict) -> dict:
 def _normalizar_internet_mb_ia(valor) -> str:
     """
     Normaliza internet_mb retornado pela IA para o formato do pipeline.
+    Pipeline espera formato BR: vírgula=decimal, ponto=milhar. Ex: '7526,866'
 
-    O pipeline espera string no formato BR: vírgula como decimal, ponto como milhar.
-    Ex: '7526,866' → pipeline remove '.', troca ',' por '.' → float 7526.866
-
-    O Gemini pode retornar em vários formatos — todos tratados aqui:
-      '14.423,700' → '14423,700'   (BR correto, apenas remove ponto milhar)
-      '7.526.866'  → '7526,866'    (só pontos → inteiro, insere vírgula)
-      '7526866'    → '7526,866'    (inteiro puro → insere vírgula)
-      '14423.700'  → '14423,700'   (ponto decimal BR invertido → converte)
-      '946,122'    → '946,122'     (já correto)
-      '14423700'   → '14423,700'   (inteiro puro grande)
+    Trata todos os formatos que o Gemini pode retornar:
+      '14.423,700' → '14423,700'  (BR correto, remove ponto milhar)
+      '7.526.866'  → '7526,866'   (só pontos → inteiro, insere vírgula)
+      '7526866'    → '7526,866'   (inteiro puro → insere vírgula)
+      '14423.700'  → '14423,700'  (ponto decimal → converte)
+      '946,122'    → '946,122'    (já correto)
     """
-    import re as _re
     s = str(valor).strip()
-
     # Caso 1: tem vírgula → formato BR (ponto=milhar, vírgula=decimal)
-    # ex: '14.423,700', '946,122', '7.526,866'
     if ',' in s:
-        return s.replace('.', '')  # remove ponto de milhar, mantém vírgula decimal
-
-    # Caso 2: ponto seguido de exatamente 3 dígitos no final → decimal
-    # ex: '14423.700', '7526.866', '946.122'
-    if _re.search(r'\.\d{3}$', s):
+        return s.replace('.', '')
+    # Caso 2: termina com ponto + exatamente 3 dígitos → decimal disfarçado
+    if re.search(r'\.\d{3}$', s):
         partes = s.rsplit('.', 1)
-        inteiro = partes[0].replace('.', '')  # remove pontos de milhar restantes
-        return inteiro + ',' + partes[1]
-
-    # Caso 3: inteiro puro (todos os pontos eram milhar, Gemini os removeu)
-    # ex: '7526866' → '7526,866' | '14423700' → '14423,700' | '946122' → '946,122'
-    s_clean = _re.sub(r'[^\d]', '', s)
+        return partes[0].replace('.', '') + ',' + partes[1]
+    # Caso 3: inteiro puro — insere vírgula antes dos últimos 3 dígitos
+    s_clean = re.sub(r'[^\d]', '', s)
     if not s_clean or s_clean == '0':
         return '0'
     if len(s_clean) > 3:
         return s_clean[:-3] + ',' + s_clean[-3:]
     return '0,' + s_clean.zfill(3)
+
+
+# Mapa de validação: faixa de mensalidade → pacote esperado
+# Usado para corrigir o pacote quando a IA erra mas a mensalidade está certa
+_PACOTES_CLARO = [
+    # (mensalidade_min, mensalidade_max, gb_pacote, nome_padrao)
+    (40.00, 50.00, 10, "Claro Pós 10GB"),
+    (50.01, 65.00, 20, "Claro Pós 20GB"),
+    (65.01, 85.00, 30, "Claro Pós 30GB"),
+    (85.01, 110.00, 50, "Claro Pós 50GB"),
+    (110.01, 999.00, 100, "Claro Pós 100GB"),
+]
+
+def _validar_pacote_ia(pacote: str, mensalidade_total: str) -> str:
+    """
+    Valida e corrige o pacote retornado pela IA usando a mensalidade como âncora.
+
+    Se o pacote veio errado (ex: "Claro Pós 20GB" quando deveria ser "10GB"),
+    usa a mensalidade para inferir o GB correto e ajusta o nome do pacote.
+
+    Só corrige se:
+    - O pacote contém "Claro Pós" (é um plano individual reconhecido)
+    - A mensalidade corresponde a um faixa diferente da indicada pelo nome
+    """
+    if not pacote or pacote == '-':
+        return pacote
+
+    # Extrai GB do pacote retornado pela IA
+    m_gb = re.search(r'(\d+)\s*GB', pacote, re.IGNORECASE)
+    if not m_gb:
+        return pacote  # pacote sem GB → não sabemos corrigir, mantém
+
+    gb_ia = int(m_gb.group(1))
+
+    # Converte mensalidade para float
+    try:
+        mensalidade = float(mensalidade_total.replace('.', '').replace(',', '.'))
+    except (ValueError, AttributeError):
+        return pacote  # sem mensalidade → mantém
+
+    if mensalidade <= 0:
+        return pacote
+
+    # Verifica se o GB bate com a faixa de mensalidade
+    for mn, mx, gb_esperado, nome_esperado in _PACOTES_CLARO:
+        if mn <= mensalidade <= mx:
+            if gb_ia != gb_esperado:
+                # IA errou o GB — corrige mantendo o prefixo do plano
+                prefixo = re.sub(r'\d+\s*GB.*', '', pacote).strip()
+                if not prefixo:
+                    prefixo = "Claro Pós"
+                return f"{prefixo} {gb_esperado}GB"
+            break  # GB correto → mantém nome original
+
+    return pacote
+
 
 def to_float(valor) -> float:
     try:
@@ -676,59 +721,64 @@ _PROMPT_FATURA = """Você é um extrator especializado em faturas da Claro Empre
 
 TAREFA: Extraia dados SOMENTE das seções com cabeçalho vermelho:
 "DETALHAMENTO DE LIGAÇÕES E SERVIÇOS DO CELULAR (XX) XXXXX XXXX"
-Ignore todas as outras seções (resumo geral, plano contratado, cobranças por celular, boleto, nota fiscal).
-
-Para CADA seção de detalhamento encontrada, extraia os 7 campos abaixo:
+Cada seção pertence a UMA linha telefônica. Não misture dados entre seções.
+Ignore todas as outras seções da fatura (resumo, plano contratado, boleto, nota fiscal).
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 CAMPO 1 — "linha"
-O número de telefone no cabeçalho da seção. 11 dígitos sem espaços/parênteses.
+Número de telefone do cabeçalho desta seção. 11 dígitos sem espaços/parênteses.
 Exemplo: "(11) 98936 0484" → "11989360484"
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-CAMPO 2 — "pacote"
-Em "Mensalidades e Pacotes Promocionais", procure o plano individual com GB:
-  • "Claro Pós 10GB", "Claro Pós 20GB", "Claro Life Ilimitado", etc.
-NÃO use "Oferta Conjunta Claro MIX" (é o bundle, não o plano).
-NÃO use "App incluso na oferta", "Aplicativos Digitais", "Pacote Mobilidade".
-Se não encontrar plano com GB, use "-".
+CAMPO 2 — "pacote" ⚠️ LEIA COM ATENÇÃO
+
+A subseção "Mensalidades e Pacotes Promocionais" tem esta estrutura típica:
+  Oferta Conjunta Claro MIX           44,99
+    App incluso na oferta – (...)       –
+    Claro Pós 10GB                      –    ← ESTE é o pacote correto
+    Aplicativos Digitais                –
+
+Regras para encontrar o pacote correto DESTA seção:
+1. Procure as linhas indentadas (com espaço antes) dentro de "Oferta Conjunta"
+2. O pacote é a linha que contém "GB" e um número (ex: "10GB", "20GB")
+3. NÃO use "Oferta Conjunta Claro MIX" — é o bundle
+4. NÃO use "App incluso", "Aplicativos Digitais", "Pacote Mobilidade"
+5. O pacote correto geralmente NÃO tem valor monetário (aparece como "–" ou vazio)
+
+⚠️ CADA SEÇÃO TEM SEU PRÓPRIO PACOTE. Não copie o pacote de uma seção para outra.
+Verifique: se a mensalidade total é R$44,99 → espera-se "Claro Pós 10GB"
+           se a mensalidade total é R$54,99 → espera-se "Claro Pós 20GB"
+Use essa lógica para validar sua leitura. Se não encontrar, use "-".
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 CAMPO 3 — "mensalidade_total"
-Valor na linha "TOTAL" em "Mensalidades e Pacotes Promocionais".
-Formato string: "44,99" (vírgula decimal, sem R$).
+Valor na linha "TOTAL" em "Mensalidades e Pacotes Promocionais" DESTA seção.
+Formato string: "44,99" (vírgula decimal, sem R$, sem ponto de milhar).
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 CAMPO 4 — "internet_mb" ⚠️ LEIA COM ATENÇÃO
-Em "Serviços (Torpedos, Hits, Jogos, etc.) → Internet (MB)", some:
-  • linha "Internet" + linha "Internet – meses anteriores" (se existir)
-  • ou use o valor "Subtotal" diretamente
+Em "Serviços (Torpedos, Hits, Jogos, etc.) → Internet (MB)" DESTA seção:
+Some "Internet" + "Internet – meses anteriores" (coluna "Mbytes Utilizados").
+Use o valor "Subtotal" se disponível — é a soma já calculada.
 
-⚠️ REGRA DE FORMATO OBRIGATÓRIA:
-Retorne o valor EXATAMENTE como aparece na fatura, como string, preservando
-o ponto de milhar e a vírgula decimal da Claro.
-
-Exemplos do que você vai ver na fatura e como retornar:
-  Fatura mostra "6.948.502"  → retorne "6.948.502"   (sem vírgula = inteiro)
-  Fatura mostra "14.264,978" → retorne "14.264,978"  (com vírgula = decimal)
-  Fatura mostra "578.364"    → retorne "578.364"
-  Subtotal "7.526.866"       → retorne "7.526.866"
-  Subtotal "14.423.700"      → retorne "14.423.700"
-
-NÃO converta para inteiro. NÃO remova os separadores. Copie exatamente.
+⚠️ FORMATO OBRIGATÓRIO: retorne o valor como string EXATAMENTE como aparece
+na fatura, preservando ponto de milhar e vírgula decimal.
+  Exemplos: "7.526.866", "14.423,700", "946.122", "578.364"
+NÃO converta para inteiro. NÃO remova separadores. Copie exatamente.
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 CAMPO 5 — "minutos"
-Tempo total de ligações nesta seção (coluna duração no TOTAL final).
+Duração total de ligações DESTA seção, na linha TOTAL do rodapé.
 Formato: "26min12s", "46min36s", ou "0".
-⚠️ Cada seção tem seu próprio TOTAL — não confunda entre seções.
+⚠️ Cada seção tem seu próprio TOTAL de minutos — não confunda.
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-CAMPO 6 — "passaporte": nome do passaporte se houver, senão "-"
-CAMPO 7 — "valor_passaporte": valor R$ do passaporte (ex: "14,99"), senão "0"
+CAMPO 6 — "passaporte": nome do passaporte Claro se houver, senão "-"
+CAMPO 7 — "valor_passaporte": valor R$ (ex: "14,99"), senão "0"
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 SAÍDA: SOMENTE array JSON válido, sem markdown, sem texto antes ou depois.
+Uma entrada por linha telefônica, na ordem em que aparecem na fatura.
 
 [
   {
@@ -1029,10 +1079,12 @@ def processar_pdf(file):
             total       = to_float(item.get("mensalidade_total", "0"))
             valor_pass  = to_float(item.get("valor_passaporte", "0"))
             valor_plano = total - valor_pass
+            pacote_raw  = item.get("pacote", "-")
+            pacote_ok   = _validar_pacote_ia(pacote_raw, item.get("mensalidade_total", "0"))
             dados.append({
                 "Linha":                  item.get("linha", ""),
                 "Internet (MB)":          _normalizar_internet_mb_ia(item.get("internet_mb", "0")),
-                "Pacote de dados":        item.get("pacote", "-"),
+                "Pacote de dados":        pacote_ok,
                 "Mensalidade":            f"R$ {valor_plano:.2f}".replace(".", ","),
                 "Passaporte":             item.get("passaporte", "-"),
                 "Mensalidade Passaporte": f"R$ {valor_pass:.2f}".replace(".", ",") if valor_pass else "-",
