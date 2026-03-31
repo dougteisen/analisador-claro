@@ -4,3 +4,4 @@ pdfplumber
 openpyxl
 google-cloud-vision
 pdf2image==1.17.0
+google-generativeai
