@@ -16,10 +16,14 @@ try:
 except ImportError:
     _VISION_DISPONIVEL = False
 
-# ── pdf2image + poppler (converte páginas PDF em imagem sem usar pdfium) ──────
-# Substitui pdfplumber.to_image() que causava "PDFium: Data format error"
-# no Streamlit Cloud com PDFs escaneados (PDF-1.6 com XObject).
-# Requer poppler: adicione "poppler-utils" ao packages.txt do Streamlit Cloud.
+# ── Google Gemini (Vision + extração inteligente — gratuito) ─────────────────
+try:
+    import google.generativeai as genai
+    _GEMINI_DISPONIVEL = True
+except ImportError:
+    _GEMINI_DISPONIVEL = False
+
+# ── pdf2image + poppler ───────────────────────────────────────────────────────
 try:
     from pdf2image import convert_from_bytes as _pdf2image_convert
     _PDF2IMAGE_DISPONIVEL = True
@@ -627,32 +631,9 @@ def extrair_gb_pacote(pacote: str) -> int:
     m = re.search(r"(\d+)\s*GB", str(pacote))
     return int(m.group(1)) if m else 0
 
-# ===== ANÁLISE VIA CLAUDE API (fallback inteligente para OCR) =====
+# ===== ANÁLISE VIA IA — Gemini Vision (gratuito) ou Anthropic (pago) ==========
 
-# ===== ANÁLISE VIA CLAUDE VISION API (PDFs de imagem) =====
-
-def analisar_pdf_imagem_com_ia(pdf_bytes: bytes) -> list[dict] | None:
-    """
-    Converte páginas do PDF em imagens JPEG e envia ao Claude Vision API.
-    Claude lê as imagens diretamente como um humano — sem OCR intermediário.
-    Elimina todos os problemas de acentuação/layout do OCR.
-    """
-    import json, requests, base64
-
-    try:
-        imgs = _pdf2image_convert(pdf_bytes, dpi=150)
-    except Exception:
-        return None
-
-    def img_to_b64(img):
-        buf = io.BytesIO()
-        img.save(buf, format="JPEG", quality=85)
-        return base64.b64encode(buf.getvalue()).decode()
-
-    content = [
-        {
-            "type": "text",
-            "text": """Você é um extrator de dados de faturas telefônicas da Claro Empresas (Brasil).
+_PROMPT_FATURA = """Você é um extrator de dados de faturas telefônicas da Claro Empresas (Brasil).
 Analise TODAS as imagens desta fatura e extraia os dados de CADA linha telefônica.
 Cada linha possui uma seção "DETALHAMENTO DE LIGAÇÕES E SERVIÇOS DO CELULAR (XX) XXXXX XXXX".
 
@@ -674,54 +655,116 @@ Formato exato:
 Regras:
 - "linha": DDD + número, 11 dígitos contínuos, sem espaços ou parênteses
 - "pacote": nome do plano individual (ex: "Claro Pós 10GB", "Claro Pós 20GB")
-- "mensalidade_total": TOTAL daquela seção DETALHAMENTO (não o total geral da fatura da primeira página)
-- "internet_mb": Mbytes de Internet da linha — some "Internet" + "Internet – meses anteriores". Número inteiro sem ponto de milhar (ex: "6948502")
+- "mensalidade_total": TOTAL daquela seção DETALHAMENTO — não o total geral da fatura
+- "internet_mb": Mbytes de Internet — some "Internet" + "Internet meses anteriores". Número inteiro sem ponto de milhar
 - "minutos": total de ligações (ex: "26min12s", "46min36s", "0")
 - "passaporte": nome do passaporte se existir, senão "-"
-- "valor_passaporte": valor do passaporte com vírgula (ex: "14,99"), senão "0"
+- "valor_passaporte": valor do passaporte (ex: "14,99"), senão "0"
 """
-        }
-    ]
 
-    for img in imgs:
-        content.append({
-            "type": "image",
-            "source": {"type": "base64", "media_type": "image/jpeg", "data": img_to_b64(img)}
-        })
-
+def _converter_paginas(pdf_bytes: bytes) -> list:
+    """Converte PDF em lista de imagens PIL."""
     try:
-        # Buscar chave Anthropic nos secrets do Streamlit
-        try:
-            anthropic_key = st.secrets["ANTHROPIC_API_KEY"]
-        except Exception:
-            anthropic_key = None
+        return _pdf2image_convert(pdf_bytes, dpi=150)
+    except Exception:
+        return []
 
-        headers = {"Content-Type": "application/json", "anthropic-version": "2023-06-01"}
-        if anthropic_key:
-            headers["x-api-key"] = anthropic_key
+def _parsear_json_ia(texto: str) -> list | None:
+    """Extrai e valida JSON da resposta da IA."""
+    try:
+        texto = re.sub(r"```json|```", "", texto).strip()
+        resultado = __import__("json").loads(texto)
+        if isinstance(resultado, list) and len(resultado) > 0:
+            return resultado
+    except Exception:
+        pass
+    return None
+
+def _analisar_com_gemini(imgs: list) -> list | None:
+    """Usa Gemini 1.5 Flash (gratuito) para extrair dados das imagens."""
+    if not _GEMINI_DISPONIVEL:
+        return None
+    try:
+        api_key = st.secrets.get("GEMINI_API_KEY") or st.secrets.get("GOOGLE_GEMINI_KEY")
+        if not api_key:
+            return None
+        genai.configure(api_key=api_key)
+        model = genai.GenerativeModel("gemini-1.5-flash")
+        # Gemini aceita PIL Images diretamente
+        partes = [_PROMPT_FATURA] + imgs
+        resp = model.generate_content(partes)
+        return _parsear_json_ia(resp.text)
+    except Exception:
+        return None
+
+def _analisar_com_anthropic(imgs: list) -> list | None:
+    """Usa Claude Sonnet (pago) como fallback se Gemini não estiver configurado."""
+    import requests, base64
+    try:
+        api_key = st.secrets.get("ANTHROPIC_API_KEY")
+        if not api_key:
+            return None
+
+        def img_to_b64(img):
+            buf = io.BytesIO()
+            img.save(buf, format="JPEG", quality=85)
+            return base64.b64encode(buf.getvalue()).decode()
+
+        content = [{"type": "text", "text": _PROMPT_FATURA}]
+        for img in imgs:
+            content.append({
+                "type": "image",
+                "source": {"type": "base64", "media_type": "image/jpeg", "data": img_to_b64(img)}
+            })
 
         resp = requests.post(
             "https://api.anthropic.com/v1/messages",
-            headers=headers,
-            json={
-                "model": "claude-sonnet-4-20250514",
-                "max_tokens": 2000,
-                "messages": [{"role": "user", "content": content}]
+            headers={
+                "Content-Type": "application/json",
+                "anthropic-version": "2023-06-01",
+                "x-api-key": api_key,
             },
+            json={"model": "claude-sonnet-4-20250514", "max_tokens": 2000,
+                  "messages": [{"role": "user", "content": content}]},
             timeout=120
         )
         if resp.status_code != 200:
-            st.error(f"❌ API Anthropic retornou erro {resp.status_code}: {resp.text[:300]}")
             return None
-        data = resp.json()
-        texto_resposta = "".join(
-            b["text"] for b in data.get("content", []) if b.get("type") == "text"
-        )
-        texto_resposta = re.sub(r"```json|```", "", texto_resposta).strip()
-        return json.loads(texto_resposta)
-    except Exception as e:
-        st.error(f"❌ Erro na chamada à API Anthropic: {type(e).__name__}: {e}")
+        texto = "".join(b["text"] for b in resp.json().get("content", []) if b.get("type") == "text")
+        return _parsear_json_ia(texto)
+    except Exception:
         return None
+
+def analisar_pdf_imagem_com_ia(pdf_bytes: bytes) -> list | None:
+    """
+    Extrai dados de PDF de imagem usando IA com visão.
+    Tenta na ordem: Gemini (gratuito) → Anthropic (pago).
+    Basta configurar UMA das chaves nos Secrets do Streamlit:
+      GEMINI_API_KEY   → gratuito, recomendado
+      ANTHROPIC_API_KEY → pago, fallback
+    """
+    imgs = _converter_paginas(pdf_bytes)
+    if not imgs:
+        st.error("❌ Não foi possível converter as páginas do PDF em imagens.")
+        return None
+
+    # Tentar Gemini primeiro (gratuito)
+    resultado = _analisar_com_gemini(imgs)
+    if resultado:
+        return resultado
+
+    # Fallback: Anthropic
+    resultado = _analisar_com_anthropic(imgs)
+    if resultado:
+        return resultado
+
+    # Nenhuma chave configurada — mostrar instrução clara
+    st.error(
+        "❌ Nenhuma chave de IA configurada nos Secrets. "
+        "Adicione **GEMINI_API_KEY** (gratuito em aistudio.google.com) "
+        "ou **ANTHROPIC_API_KEY** nos Secrets do Streamlit Cloud."
+    )
+    return None
 
 
 def processar_pdf(file):
