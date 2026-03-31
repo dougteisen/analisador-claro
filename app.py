@@ -622,11 +622,18 @@ def extrair_detalhamento(blocos: dict) -> dict:
     return mapa
 
 def _normalizar_internet_mb(valor) -> str:
-    """Normaliza internet_mb da IA: remove separadores de milhar, retorna inteiro string."""
+    """
+    Normaliza internet_mb retornado pela IA.
+    Remove separadores de milhar (ponto ou vírgula antes de grupos de 3 dígitos).
+    Retorna string de inteiro puro. Ex: "7.526.866" → "7526866"
+    """
     s = re.sub(r"[^\d.,]", "", str(valor).strip())
     if not s:
         return "0"
+    # Remove separadores de milhar iterativamente
     s = re.sub(r"[.,](\d{3})(?=[.,\d]|$)", r"\1", s)
+    s = re.sub(r"[.,](\d{3})(?=[.,\d]|$)", r"\1", s)
+    # Remove decimal restante
     s = re.sub(r"[.,]\d*$", "", s)
     s = re.sub(r"[.,]", "", s)
     return s or "0"
@@ -645,45 +652,76 @@ def extrair_gb_pacote(pacote: str) -> int:
 
 _PROMPT_FATURA = """Você é um extrator especializado em faturas da Claro Empresas (Brasil).
 
-TAREFA: Extraia dados SOMENTE das seções "DETALHAMENTO DE LIGAÇÕES E SERVIÇOS DO CELULAR".
+TAREFA: Extraia dados SOMENTE das seções com cabeçalho vermelho:
+"DETALHAMENTO DE LIGAÇÕES E SERVIÇOS DO CELULAR (XX) XXXXX XXXX"
+Ignore todas as outras seções (resumo geral, plano contratado, cobranças por celular, boleto, nota fiscal).
 
-REGRA FUNDAMENTAL: Cada seção de detalhamento começa com um cabeçalho vermelho/colorido assim:
-  "DETALHAMENTO DE LIGAÇÕES E SERVIÇOS DO CELULAR (XX) XXXXX XXXX"
-Ignore completamente qualquer outra seção da fatura (resumo geral, plano contratado, cobranças por celular, boleto, etc.)
+Para CADA seção de detalhamento encontrada, extraia os 7 campos abaixo:
 
-PARA CADA seção de detalhamento encontrada, extraia:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+CAMPO 1 — "linha"
+O número de telefone que aparece no cabeçalho desta seção.
+Formato: 11 dígitos sem espaços, parênteses ou hífen.
+Exemplo: "(11) 98936 0484" → "11989360484"
 
-1. "linha": o número de telefone do cabeçalho dessa seção — 11 dígitos sem espaços/parênteses
-   Ex: "(11) 98936 0484" → "11989360484"
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+CAMPO 2 — "pacote"
+Na subseção "Mensalidades e Pacotes Promocionais" desta seção de detalhamento,
+procure as linhas indentadas abaixo de "Oferta Conjunta Claro MIX" ou similar.
+O pacote individual é a linha que menciona GB, como:
+  • "Claro Pós 10GB"
+  • "Claro Pós 20GB"
+  • "Claro Life Ilimitado"
+  • "Claro Controle"
+NÃO use "Oferta Conjunta Claro MIX" — isso é o nome do bundle, não o plano.
+NÃO use "App incluso na oferta", "Aplicativos Digitais", "Pacote Mobilidade".
+Se não encontrar nenhum plano com GB, use "-".
 
-2. "pacote": nome do plano individual dentro desta seção, na subseção "Mensalidades e Pacotes Promocionais"
-   Procure por: "Claro Pós Xgb", "Claro Pós 10GB", "Claro Pós 20GB", "Claro Life Ilimitado", etc.
-   NÃO use "Oferta Conjunta Claro MIX" — isso é o nome do bundle, não o plano individual
-   Se não encontrar plano individual, use "-"
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+CAMPO 3 — "mensalidade_total"
+O valor na linha "TOTAL" ao fim da subseção "Mensalidades e Pacotes Promocionais".
+Formato: "44,99" (vírgula decimal, sem R$, sem ponto de milhar).
 
-3. "mensalidade_total": valor na linha "TOTAL" DENTRO desta seção de detalhamento
-   Formato: "44,99" (sem R$, sem ponto de milhar)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+CAMPO 4 — "internet_mb" ⚠️ ATENÇÃO ESPECIAL
+Na subseção "Serviços (Torpedos, Hits, Jogos, etc.) → Internet (MB)",
+localize as linhas "Internet" e "Internet – meses anteriores".
+Some os valores da coluna "Mbytes Utilizados" das DUAS linhas.
 
-4. "internet_mb": soma dos Mbytes de Internet desta linha, na subseção "Serviços (Torpedos, Hits, Jogos, etc.) → Internet (MB)"
-   Some "Internet" + "Internet – meses anteriores" se existir
-   Use o valor da coluna "Mbytes Utilizados"
-   Retorne número inteiro sem ponto de milhar nem vírgula (ex: 6948502, não 6.948.502)
+Exemplo real desta fatura:
+  Internet               6.948.502
+  Internet–meses ant.      578.364
+  Subtotal               7.526.866  ← use este valor (ou some manualmente)
 
-5. "minutos": valor na última linha "TOTAL" desta seção, coluna de duração (ex: "26min12s", "46min36s")
-   Se não houver ligações, use "0"
+⚠️ REGRA CRÍTICA: retorne o número como INTEIRO SEM QUALQUER SEPARADOR.
+  CORRETO:   7526866
+  ERRADO:    7.526.866  (com ponto)
+  ERRADO:    7526,866   (com vírgula)
+  ERRADO:    7526.866   (com ponto decimal)
 
-6. "passaporte": nome do passaporte se houver linha "Claro Passaporte" em Mensalidades, senão "-"
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+CAMPO 5 — "minutos"
+O tempo total de ligações nesta seção.
+Está na linha "TOTAL" no rodapé da seção, na coluna de duração.
+Formato: "26min12s", "46min36s", ou "0" se não houver ligações.
+⚠️ Cuidado: cada seção tem seu próprio TOTAL — não confunda com outros.
 
-7. "valor_passaporte": valor em R$ do passaporte (ex: "14,99"), senão "0"
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+CAMPO 6 — "passaporte"
+Se houver linha "Claro Passaporte XGBX" em Mensalidades, use o nome. Senão "-".
 
-Retorne SOMENTE um array JSON válido, sem markdown, sem texto antes ou depois.
-Exemplo de saída correta:
+CAMPO 7 — "valor_passaporte"
+Valor em R$ do passaporte (ex: "14,99"). Senão "0".
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+SAÍDA: SOMENTE array JSON válido, sem markdown, sem texto antes ou depois.
+
 [
   {
     "linha": "11989360484",
     "pacote": "Claro Pós 10GB",
     "mensalidade_total": "44,99",
-    "internet_mb": 6948502,
+    "internet_mb": 7526866,
     "minutos": "26min12s",
     "passaporte": "-",
     "valor_passaporte": "0"
@@ -712,9 +750,13 @@ def _parsear_json_ia(texto: str) -> list | None:
 def _analisar_com_gemini(imgs: list) -> list | None:
     """
     Usa Gemini para extrair dados das imagens.
-    Ordem: gemini-3.1-flash-lite (500 RPD) → gemini-2.5-flash-lite (20) → gemini-2.5-flash (20)
-    Envia TODAS as páginas em um único request para o modelo ter contexto completo da fatura.
-    Se falhar por tokens, divide em 2 batches com consolidação de resultados.
+
+    Modelos confirmados disponíveis no free tier (verificado na conta):
+      1. gemini-2.5-flash-lite  → 10 RPM, 20 RPD
+      2. gemini-2.5-flash       →  5 RPM, 20 RPD  (fallback)
+
+    Envia TODAS as páginas em um único request para o modelo ter
+    contexto completo da fatura e não confundir seções.
     """
     if not _GEMINI_DISPONIVEL:
         return None
@@ -734,28 +776,11 @@ def _analisar_com_gemini(imgs: list) -> list | None:
 
     import time
 
+    # Apenas modelos confirmados disponíveis na conta (sem gemini-3.1-flash-lite)
     MODELOS = [
-        "gemini-3.1-flash-lite",
         "gemini-2.5-flash-lite",
         "gemini-2.5-flash",
     ]
-
-    def _tentar_request(model, paginas, tentativas=3):
-        """Faz request com retry em caso de quota 429."""
-        for t in range(tentativas):
-            try:
-                resp = model.generate_content([_PROMPT_FATURA] + paginas)
-                return _parsear_json_ia(resp.text)
-            except Exception as e:
-                err = str(e)
-                is_quota = any(x in err for x in ["429", "RESOURCE_EXHAUSTED", "quota"])
-                if is_quota and t < tentativas - 1:
-                    time.sleep(15 * (2 ** t))
-                elif is_quota:
-                    return "QUOTA"
-                else:
-                    raise
-        return None
 
     def _deduplicar(lista):
         vistos, unicos = set(), []
@@ -766,27 +791,42 @@ def _analisar_com_gemini(imgs: list) -> list | None:
                 unicos.append(item)
         return unicos
 
+    def _request_com_retry(model, paginas):
+        """Request com backoff em quota 429. Retorna lista, None ou 'QUOTA'."""
+        for tentativa in range(3):
+            try:
+                resp = model.generate_content([_PROMPT_FATURA] + paginas)
+                return _parsear_json_ia(resp.text)
+            except Exception as e:
+                err = str(e)
+                is_quota = any(x in err for x in ["429", "RESOURCE_EXHAUSTED", "quota"])
+                if is_quota and tentativa < 2:
+                    time.sleep(15 * (2 ** tentativa))  # 15s, 30s
+                elif is_quota:
+                    return "QUOTA"
+                else:
+                    raise
+        return None
+
     for modelo_nome in MODELOS:
         try:
             model = genai.GenerativeModel(modelo_nome)
 
-            # Tenta 1: envia TODAS as páginas juntas (melhor contexto para o modelo)
-            resultado = _tentar_request(model, imgs)
+            # Envia todas as páginas juntas para melhor contexto
+            resultado = _request_com_retry(model, imgs)
 
             if resultado == "QUOTA":
                 st.warning(f"⚠️ Modelo **{modelo_nome}** com quota atingida, tentando alternativa...")
                 continue
 
-            # Se retornou mais linhas do que o esperado (páginas batches podem duplicar),
-            # tenta dividir em 2 metades e consolidar — fallback automático
-            if resultado and len(resultado) > 0:
+            if resultado:
                 return _deduplicar(resultado)
 
-            # Tenta 2: divide em 2 batches se retornou vazio (fatura grande)
+            # Fallback: divide em 2 metades se retornou vazio
             metade = len(imgs) // 2
             if metade > 0:
-                r1 = _tentar_request(model, imgs[:metade]) or []
-                r2 = _tentar_request(model, imgs[metade:]) or []
+                r1 = _request_com_retry(model, imgs[:metade]) or []
+                r2 = _request_com_retry(model, imgs[metade:]) or []
                 if r1 == "QUOTA" or r2 == "QUOTA":
                     st.warning(f"⚠️ Modelo **{modelo_nome}** quota atingida, tentando alternativa...")
                     continue
@@ -796,7 +836,7 @@ def _analisar_com_gemini(imgs: list) -> list | None:
 
         except Exception as e:
             err = str(e)
-            if any(x in err for x in ["429", "RESOURCE_EXHAUSTED", "quota", "not found", "404", "deprecated"]):
+            if any(x in err for x in ["429", "RESOURCE_EXHAUSTED", "quota", "not found", "404"]):
                 st.warning(f"⚠️ Modelo **{modelo_nome}** indisponível, tentando alternativa...")
                 continue
             st.warning(f"⚠️ Gemini ({modelo_nome}): {e}")
@@ -805,7 +845,7 @@ def _analisar_com_gemini(imgs: list) -> list | None:
     st.error(
         "❌ **Quota do Gemini esgotada.** Soluções:\n"
         "- Aguarde o reset (~04h Brasília)\n"
-        "- Configure `ANTHROPIC_API_KEY` nos Secrets\n"
+        "- Configure `ANTHROPIC_API_KEY` nos Secrets como alternativa\n"
         "- Ative faturamento em [aistudio.google.com](https://aistudio.google.com/app/billing)"
     )
     return None
