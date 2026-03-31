@@ -624,29 +624,18 @@ def extrair_detalhamento(blocos: dict) -> dict:
 def _normalizar_internet_mb(valor) -> str:
     """
     Normaliza o campo internet_mb retornado pela IA.
-    A IA pode retornar: "6948502", "6.948.502", "6,948,502", "6948,502", "6948.502"
-    Retorna sempre uma string de inteiro sem separador de milhar.
+    A IA pode retornar: "6948502", "6.948.502", "6,948,502", "6948,502"
+    Retorna sempre string de inteiro sem separador de milhar.
     """
-    s = str(valor).strip()
-    # Remove qualquer caractere que não seja dígito, ponto ou vírgula
-    s = re.sub(r"[^\d.,]", "", s)
+    s = re.sub(r"[^\d.,]", "", str(valor).strip())
     if not s:
         return "0"
-    # Se tiver vírgula como decimal (ex: "6948,502" → os últimos 3 dígitos são MB)
-    # Heurística: se a última vírgula/ponto estiver seguida de exatamente 3 dígitos,
-    # provavelmente é separador de milhar — remove. Senão, converte decimal.
-    # Caso mais seguro: remover todos os separadores que não sejam decimais.
-    # Se terminar com ",XX" ou ".XX" (2 casas), é decimal
-    # Se terminar com ",XXX" ou ".XXX" (3 casas), é milhar → remove
-    m = re.match(r"^([\d]+(?:[.,][\d]{3})*)[.,]?([\d]{0,2})$", s)
-    if m:
-        inteiro = m.group(1).replace(".", "").replace(",", "")
-        decimal = m.group(2)
-        return inteiro  # descarta decimais, queremos MB inteiro
-    # Fallback: remove todos os pontos e vírgulas e retorna o número
-    return re.sub(r"[.,]", "", s)
+    s = re.sub(r"[.,](\d{3})(?=[.,\d]|$)", r"\1", s)
+    s = re.sub(r"[.,]\d*$", "", s)
+    s = re.sub(r"[.,]", "", s)
+    return s or "0"
 
-
+def to_float(valor) -> float:
     try:
         return float(str(valor).replace(".", "").replace(",", "."))
     except (ValueError, TypeError):
@@ -706,30 +695,106 @@ def _parsear_json_ia(texto: str) -> list | None:
     return None
 
 def _analisar_com_gemini(imgs: list) -> list | None:
-    """Usa Gemini 1.5 Flash (gratuito) para extrair dados das imagens."""
+    """
+    Usa Gemini para extrair dados das imagens do PDF.
+
+    Ordem de modelos por RPD no free tier (sua conta):
+      1. gemini-3.1-flash-lite  → 500 RPD  ← PRIORITÁRIO
+      2. gemini-2.5-flash-lite  →  20 RPD  ← fallback
+      3. gemini-2.5-flash       →  20 RPD  ← fallback
+
+    Anti-quota: batches de 3 páginas + retry com backoff exponencial.
+    """
     if not _GEMINI_DISPONIVEL:
         return None
+
+    api_key = None
     try:
-        # Streamlit secrets pode ser acessado como dict ou atributo
-        api_key = None
+        api_key = st.secrets["GEMINI_API_KEY"]
+    except Exception:
         try:
-            api_key = st.secrets["GEMINI_API_KEY"]
+            api_key = st.secrets["GOOGLE_GEMINI_KEY"]
         except Exception:
-            try:
-                api_key = st.secrets["GOOGLE_GEMINI_KEY"]
-            except Exception:
-                pass
-        if not api_key:
-            return None
-        genai.configure(api_key=api_key)
-        model = genai.GenerativeModel("gemini-2.0-flash")
-        # Gemini aceita PIL Images diretamente
-        partes = [_PROMPT_FATURA] + imgs
-        resp = model.generate_content(partes)
-        return _parsear_json_ia(resp.text)
-    except Exception as e:
-        st.warning(f"⚠️ Gemini: {e}")
+            pass
+    if not api_key:
         return None
+
+    genai.configure(api_key=api_key)
+
+    import time
+
+    # Modelos em ordem de prioridade (maior RPD primeiro)
+    MODELOS = [
+        "gemini-3.1-flash-lite",       # 500 RPD — melhor opção free tier
+        "gemini-2.5-flash-lite",        # 20 RPD  — fallback
+        "gemini-2.5-flash",             # 20 RPD  — último recurso
+    ]
+    BATCH = 3  # 3 páginas por request
+
+    for modelo_nome in MODELOS:
+        try:
+            model = genai.GenerativeModel(modelo_nome)
+            todos_resultados = []
+            quota_esgotada = False
+            paginas_batches = [imgs[i:i+BATCH] for i in range(0, len(imgs), BATCH)]
+
+            for batch in paginas_batches:
+                sucesso = False
+                for tentativa in range(3):
+                    try:
+                        resp = model.generate_content([_PROMPT_FATURA] + batch)
+                        parcial = _parsear_json_ia(resp.text)
+                        if parcial:
+                            todos_resultados.extend(parcial)
+                        sucesso = True
+                        break
+                    except Exception as e:
+                        err = str(e)
+                        is_quota = any(x in err for x in ["429", "RESOURCE_EXHAUSTED", "quota"])
+                        if is_quota and tentativa < 2:
+                            time.sleep(15 * (2 ** tentativa))  # 15s, 30s
+                        elif is_quota:
+                            quota_esgotada = True
+                            break
+                        else:
+                            raise  # erro diferente — propaga para o except externo
+                if quota_esgotada:
+                    break
+
+            if quota_esgotada:
+                st.warning(f"⚠️ Modelo **{modelo_nome}** com quota atingida, tentando alternativa...")
+                continue
+
+            if todos_resultados:
+                # Deduplica por número de linha (batches podem repetir)
+                vistos, unicos = set(), []
+                for item in todos_resultados:
+                    k = item.get("linha", "")
+                    if k and k not in vistos:
+                        vistos.add(k)
+                        unicos.append(item)
+                return unicos if unicos else None
+
+        except Exception as e:
+            err = str(e)
+            is_quota = any(x in err for x in ["429", "RESOURCE_EXHAUSTED", "quota"])
+            is_unavail = any(x in err.lower() for x in ["not found", "404", "deprecated"])
+            if is_quota or is_unavail:
+                st.warning(f"⚠️ Modelo **{modelo_nome}** indisponível, tentando alternativa...")
+                continue
+            st.warning(f"⚠️ Gemini ({modelo_nome}): {e}")
+            return None
+
+    # Todos os modelos falharam por quota
+    st.error(
+        "❌ **Quota do Gemini esgotada em todos os modelos.**\n\n"
+        "**Soluções:**\n"
+        "- Aguarde o reset diário (~04h horário de Brasília)\n"
+        "- Configure `ANTHROPIC_API_KEY` nos Secrets como alternativa\n"
+        "- Ative o faturamento em [aistudio.google.com](https://aistudio.google.com/app/billing) "
+        "para aumentar os limites"
+    )
+    return None
 
 def _analisar_com_anthropic(imgs: list) -> list | None:
     """Usa Claude Sonnet (pago) como fallback se Gemini não estiver configurado."""
