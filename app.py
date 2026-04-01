@@ -659,19 +659,25 @@ Número do cabeçalho. 11 dígitos sem espaços/parênteses.
 ━━━ "pacote" ━━━
 DENTRO desta seção, em "Mensalidades e Pacotes Promocionais":
 
-  Oferta Conjunta Claro MIX       52,48
-    App incluso na oferta – ...     –
-    Claro Pós 40GB                  –   ← este é o pacote desta linha
-    Aplicativos Digitais            –
+A estrutura pode variar. Dois exemplos reais desta fatura:
 
-O pacote é a linha indentada que contém "GB" no nome.
-Exemplos válidos: "Claro Pós 10GB", "Claro Pós 20GB", "Claro Pós 40GB", "Claro Controle 5GB"
-NÃO use: "Oferta Conjunta Claro MIX", "App incluso", "Aplicativos Digitais", "Pacote Mobilidade"
+  Exemplo A (Claro Pós 40GB):
+    Oferta Conjunta Claro MIX       52,48
+      App incluso na oferta – ...     –
+      Claro Pós 40GB                  –   ← pacote correto
+      Aplicativos Digitais            –
 
-⚠️ CADA SEÇÃO TEM SEU PRÓPRIO PACOTE. Antes de registrar, confirme que o número
-da linha do cabeçalho desta seção bate com o pacote que você está lendo.
-NÃO copie o pacote de uma seção para outra.
-Se não encontrar linha com GB nesta seção específica, use "-".
+  Exemplo B (Claro Pós 10GB — com Bônus):
+    Oferta Conjunta Claro MIX       48,49
+      Bônus de Internet Turbo – 4GB  0,00
+      Claro Pós 10GB                  –   ← pacote correto
+      Pacote Mobilidade              0,00
+
+O pacote é SEMPRE a linha com "GB" no nome após "Claro Pós", "Claro Controle", etc.
+Ignore: "Oferta Conjunta", "App incluso", "Bônus de Internet Turbo", "Aplicativos Digitais", "Pacote Mobilidade", "Pacote Redes Sociais".
+
+⚠️ CADA SEÇÃO TEM SEU PRÓPRIO PACOTE — leia dentro desta seção específica.
+NÃO copie de outra seção. Se não encontrar linha com GB, use "-".
 
 ━━━ "mensalidade_total" ━━━
 Linha "TOTAL" da subseção "Mensalidades e Pacotes Promocionais" desta seção.
@@ -1333,28 +1339,56 @@ def gerar_excel(df: pd.DataFrame) -> io.BytesIO:
     return buffer
 
 # ===== EXECUÇÃO =====
+# ===== EXECUÇÃO =====
+# Usa session_state para evitar re-análise ao clicar em botões (ex: download Excel)
+# A análise só é refeita quando os arquivos enviados mudam.
+
+# Gera uma chave única baseada nos arquivos carregados
+_arquivos_key = tuple(
+    (f.name, f.size) for f in uploaded_files
+) if uploaded_files else ()
+
+# Se os arquivos mudaram, limpa o cache
+if st.session_state.get("_arquivos_key") != _arquivos_key:
+    st.session_state["_arquivos_key"] = _arquivos_key
+    st.session_state["_df_total"] = None
+    st.session_state["_cliente_nome"] = "CLIENTE"
+    st.session_state["_vencimento_fatura"] = ""
+
 if uploaded_files:
-    df_total = pd.DataFrame()
-    cliente_nome = "CLIENTE"
-    vencimento_fatura = ""
+    # Só processa se ainda não tiver resultado em cache
+    if st.session_state.get("_df_total") is None:
+        df_total = pd.DataFrame()
+        cliente_nome = "CLIENTE"
+        vencimento_fatura = ""
 
-    progress = st.progress(0)
-    total_files = len(uploaded_files)
+        progress = st.progress(0)
+        total_files = len(uploaded_files)
 
-    for i, file in enumerate(uploaded_files):
-        try:
-            with st.spinner(f"Processando {file.name}..."):
-                df, cliente, vencimento = processar_pdf(file)
-                df_total = pd.concat([df_total, df], ignore_index=True)
-                cliente_nome = cliente
-                vencimento_fatura = vencimento
-        except Exception as e:
-            st.error(f"❌ Erro ao processar **{file.name}**: {e}")
-            continue
+        for i, file in enumerate(uploaded_files):
+            try:
+                with st.spinner(f"Processando {file.name}..."):
+                    df, cliente, vencimento = processar_pdf(file)
+                    df_total = pd.concat([df_total, df], ignore_index=True)
+                    cliente_nome = cliente
+                    vencimento_fatura = vencimento
+            except Exception as e:
+                st.error(f"❌ Erro ao processar **{file.name}**: {e}")
+                continue
 
-        progress.progress((i + 1) / total_files)
+            progress.progress((i + 1) / total_files)
 
-    if not df_total.empty:
+        # Salva resultado no session_state
+        st.session_state["_df_total"] = df_total
+        st.session_state["_cliente_nome"] = cliente_nome
+        st.session_state["_vencimento_fatura"] = vencimento_fatura
+
+    # Recupera resultado do cache (sem re-processar)
+    df_total = st.session_state["_df_total"]
+    cliente_nome = st.session_state["_cliente_nome"]
+    vencimento_fatura = st.session_state["_vencimento_fatura"]
+
+    if df_total is not None and not df_total.empty:
         st.markdown('<div class="tt-divider"></div>', unsafe_allow_html=True)
         st.markdown('<p class="tt-section-title">📊 Resumo da Fatura</p>', unsafe_allow_html=True)
 
