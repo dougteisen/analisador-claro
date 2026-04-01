@@ -170,8 +170,8 @@ hr {
     background: transparent !important;
     border: none !important;
 }
-/* Corrige botão duplicado — mantém apenas o primeiro botão visível */
-[data-testid="stFileUploaderDropzone"] button[data-testid="stBaseButton-secondary"] ~ button[data-testid="stBaseButton-secondary"] {
+/* Esconde o texto duplicado dentro do botão (stMarkdownContainer mostra "upload" junto com o ícone) */
+[data-testid="stFileUploaderDropzone"] button [data-testid="stMarkdownContainer"] {
     display: none !important;
 }
 /* Estilo do botão de upload */
