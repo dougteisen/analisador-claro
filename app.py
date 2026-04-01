@@ -976,74 +976,92 @@ Retorne o Subtotal exatamente como aparece na fatura. Se zero/ausente, retorne "
 
 # ── Prompt exclusivo para plano compartilhado em PDF de imagem ───────────────
 _PROMPT_FATURA_COMPARTILHADA = """Você é um extrator especializado em faturas da Claro Empresas (Brasil).
-Esta fatura é de PLANO COMPARTILHADO. Siga as instruções abaixo com atenção.
+Esta fatura é de PLANO COMPARTILHADO. Siga as instruções com máxima atenção.
 
 ━━━ PARTE 1 — METADADOS DA CAPA (primeira página) ━━━
-- "cliente": razão social da empresa (ex: "CONFRUTY ALIMENTOS EIRELI"). NÃO use número de conta.
-- "vencimento": data de vencimento DD/MM/AAAA (ex: "24/03/2026")
+- "cliente": razão social da empresa. NÃO use número de conta.
+- "vencimento": data de vencimento DD/MM/AAAA.
 
 ━━━ PARTE 2 — PLANO COMPARTILHADO (primeira página, seção "1. PLANO CONTRATADO") ━━━
-Procure a subseção "Compartilhado" e extraia:
-- "nome_plano_compartilhado": nome completo do plano. Ex: "Claro Total Compartilhado 150GB"
-  Está logo abaixo de "Oferta Conjunta Claro MIX" ou similar, antes do "[192]".
-  Exemplo de estrutura:
-    Compartilhado
-    Oferta Conjunta Claro MIX              310,28
-      Claro Total Compartilhado 150GB [192]       ← este é o nome (ignore o [192])
-      Aplicativos Digitais
-- "valor_plano_compartilhado": valor numérico na linha "Oferta Conjunta Claro MIX". Ex: "310,28"
-  Formato: vírgula decimal, sem R$. Este valor é cobrado UMA vez para toda a conta.
+
+A estrutura REAL desta fatura na capa é:
+
+  1. PLANO CONTRATADO                                          VALOR R$
+  Compartilhado
+  Oferta Conjunta Claro MIX                                    310,28
+    Claro Total Compartilhado 150GB [192]
+    Aplicativos Digitais
+  Individual
+  Oferta Claro Total Mix Plugin Smartphone                     297,80
+    Assinatura Smartphone [192]
+    Aplicativos Digitais
+  SUBTOTAL – PLANO CONTRATADO                          R$      608,08
+
+Extraia:
+- "nome_plano_compartilhado": linha que contém "Claro Total Compartilhado" seguida de XGB.
+  Ignore o código entre colchetes como [192]. Exemplo: "Claro Total Compartilhado 150GB"
+- "valor_plano_compartilhado": valor numérico NA MESMA LINHA de "Oferta Conjunta Claro MIX"
+  (coluna direita). Exemplo: "310,28". Formato: vírgula decimal, sem R$.
+
+⚠️ NÃO confunda com o valor "Individual" (Oferta Claro Total Mix Plugin Smartphone).
+⚠️ NÃO use o SUBTOTAL PLANO CONTRATADO — esse é o total de tudo.
+⚠️ Se o valor aparecer como "310.28" (ponto decimal), converta para "310,28".
 
 ━━━ PARTE 3 — UMA ENTRADA POR SEÇÃO DE DETALHAMENTO ━━━
-Cada seção começa com cabeçalho colorido:
+Cada seção começa com cabeçalho colorido/vermelho:
   "DETALHAMENTO DE LIGAÇÕES E SERVIÇOS DO CELULAR (XX) XXXXX XXXX"
 
 ⚠️ REGRA ABSOLUTA: retorne UMA entrada para CADA seção, SEM EXCEÇÃO.
 NUNCA pule uma seção. Seções sem uso → internet_mb "0" e minutos "0".
 Conte as seções antes de montar o JSON e confirme que o número de entradas bate.
-Processe cada seção ISOLADAMENTE.
+Processe cada seção ISOLADAMENTE — dados de uma seção nunca vazam para outra.
 
 ━━━ "linha" ━━━
-Número do cabeçalho da seção. 11 dígitos, sem espaços/parênteses.
+Número do cabeçalho. 11 dígitos sem espaços/parênteses.
 "(11) 99946 5790" → "11999465790"
 
 ━━━ "mensalidade_individual" ━━━
 DENTRO desta seção, em "Mensalidades e Pacotes Promocionais":
-Procure "Oferta Claro Total Mix Plugin Smartphone" e o valor numérico na mesma linha.
-Exemplo:
+
+Estrutura real:
   Oferta Claro Total Mix Plugin Smartphone    21,37
     Assinatura Smartphone [192]                  –
     Aplicativos Digitais                         –
   TOTAL                                       R$ 21,37
-Use o valor do TOTAL desta subseção (ex: "21,37"). Formato: vírgula decimal, sem R$.
-⚠️ O valor pode variar entre linhas (ex: "19,99" para uma linha, "21,37" para outras).
-⚠️ NUNCA copie o valor de outra seção. Leia dentro desta seção específica.
+
+Use o valor do TOTAL desta subseção. Formato: vírgula decimal, sem R$.
+⚠️ O valor PODE variar por linha (ex: "19,99" em uma linha, "21,37" nas demais).
+⚠️ NUNCA copie de outra seção.
 
 ━━━ "internet_mb" ━━━
 DENTRO desta seção, em "Serviços (Torpedos, Hits, Jogos, etc.) → Internet (MB)":
-  Serviço                  Mbytes Utilizados
-  Internet                       535.753
-  Internet – meses ant.           42.204
-  Subtotal                       577.957   ← USE ESTE (se existir)
+
+Estrutura real:
+  Serviço                  Mbytes Utilizados   Tarifa (R$)   Valor Cobrado (R$)
+  Internet                    12.916,518           0,00            0,00
+  Internet – meses ant.          596,958           0,00            0,00
+  Subtotal                    13.513,476                           0,00  ← USE ESTE
 
 Regras em ordem de prioridade:
-1. Use "Subtotal" se existir
-2. Some "Internet" + "Internet – meses anteriores" se não houver Subtotal
-3. Use só "Internet" se não houver meses anteriores
-4. Retorne "0" se não houver seção Internet nesta seção
+1. Use o valor da linha "Subtotal" se existir — é sempre a soma correta
+2. Se não houver Subtotal: some "Internet" + "Internet – meses anteriores"
+3. Se só houver "Internet": use esse valor
+4. Retorne "0" se não houver seção Internet
 
-⚠️ NUNCA use valores da tabela "Detalhes da Internet móvel" (datas diárias).
-Retorne como STRING com pontos: "535.753", "13.390", "0"
+⚠️ ATENÇÃO: os valores de Mbytes têm VÍRGULA como separador decimal e PONTO como milhar.
+   Exemplo: "13.513,476" significa treze mil quinhentos e treze vírgula quatrocentos e setenta e seis MB.
+   Retorne EXATAMENTE como aparece na fatura: "13.513,476" — NÃO transforme em "13513476".
+⚠️ NUNCA use valores da tabela "Detalhes da Internet móvel" (datas diárias com valores pequenos).
+⚠️ Nunca some valores de seções diferentes.
 
 ━━━ "minutos" ━━━
-Linha "TOTAL" do rodapé desta seção, coluna "Duração".
-Exemplos: "15min6s", "393min42s", "28min42s", "0".
+Linha "TOTAL" do RODAPÉ desta seção (última linha da seção), coluna "Duração".
+Exemplos: "15min6s", "393min42s", "0".
 ⚠️ Cada seção tem seu TOTAL próprio. NÃO copie de outra seção.
 Se não houver ligações, retorne "0".
 
 ━━━ "passaporte" / "valor_passaporte" ━━━
-Se houver "Claro Passaporte" em Mensalidades → nome completo e valor numérico.
-Senão: "-" e "0".
+Se houver "Claro Passaporte" em Mensalidades → nome e valor. Senão: "-" e "0".
 
 ━━━ SAÍDA ━━━
 SOMENTE JSON válido, sem markdown, sem texto extra.
@@ -1064,10 +1082,10 @@ SOMENTE JSON válido, sem markdown, sem texto extra.
       "valor_passaporte": "0"
     },
     {
-      "linha": "11932104461",
+      "linha": "11989669622",
       "mensalidade_individual": "21,37",
-      "internet_mb": "1.000.621",
-      "minutos": "23min",
+      "internet_mb": "13.513,476",
+      "minutos": "11min6s",
       "passaporte": "-",
       "valor_passaporte": "0"
     }
@@ -1079,28 +1097,29 @@ SOMENTE JSON válido, sem markdown, sem texto extra.
 _PROMPT_VERIFICAR_INTERNET_COMPARTILHADO = """Analise esta fatura Claro Empresas (plano compartilhado).
 Para CADA seção "DETALHAMENTO DE LIGAÇÕES E SERVIÇOS DO CELULAR (XX) XXXXX XXXX":
 
-Encontre DENTRO DESTA SEÇÃO a subseção "Internet (MB)" com esta estrutura:
-  Serviço              Mbytes Utilizados
-  Internet                   535.753
-  Internet – meses ant.       42.204
-  Subtotal                   577.957   ← retorne este valor
+Encontre DENTRO DESTA SEÇÃO EXCLUSIVAMENTE a subseção "Internet (MB)":
+
+  Serviço                  Mbytes Utilizados   Tarifa (R$)   Valor Cobrado (R$)
+  Internet                    12.916,518           0,00            0,00
+  Internet – meses ant.          596,958           0,00            0,00
+  Subtotal                    13.513,476                           0,00  ← USE ESTE
 
 Regras:
-1. Use "Subtotal" quando existir
+1. Use o valor da linha "Subtotal" quando existir
 2. Se não houver Subtotal: some "Internet" + "Internet – meses anteriores"
 3. Se só houver "Internet": use esse valor
 4. Se não houver seção Internet: retorne "0"
 
-⚠️ NUNCA use valores da tabela de datas diárias ("Detalhes da Internet móvel").
-⚠️ Cada número de linha tem seus próprios valores — não misture entre seções.
+⚠️ CRÍTICO: os Mbytes usam PONTO como separador de milhar e VÍRGULA como decimal.
+   "13.513,476" = treze mil quinhentos e treze MB. Retorne EXATAMENTE como está na fatura.
+⚠️ Cada seção tem seu próprio Subtotal — NUNCA misture valores entre seções diferentes.
+⚠️ NUNCA use a tabela "Detalhes da Internet móvel" (contém valores diários pequenos).
 
 Retorne SOMENTE JSON:
 [
   {"linha": "11919030001", "internet_mb": "33.511"},
-  {"linha": "11932104461", "internet_mb": "1.000.621"}
+  {"linha": "11989669622", "internet_mb": "13.513,476"}
 ]
-
-Retorne o Subtotal exatamente como aparece na fatura. Se zero/ausente, retorne "0".
 """
 
 
