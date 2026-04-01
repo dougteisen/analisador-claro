@@ -170,17 +170,20 @@ hr {
     background: transparent !important;
     border: none !important;
 }
-/* Corrige botão duplicado em versões recentes do Streamlit */
-[data-testid="stFileUploaderDropzone"] button:not(:first-of-type) {
+/* Corrige botão duplicado — mantém apenas o primeiro botão visível */
+[data-testid="stFileUploaderDropzone"] button[data-testid="stBaseButton-secondary"] ~ button[data-testid="stBaseButton-secondary"] {
     display: none !important;
 }
-[data-testid="stFileUploaderDropzone"] button {
-    background: rgba(16,185,129,0.15) !important;
+/* Estilo do botão de upload */
+[data-testid="stFileUploaderDropzone"] button[data-testid="stBaseButton-secondary"] {
+    background: rgba(16,185,129,0.12) !important;
     color: #10b981 !important;
-    border: 1px solid rgba(16,185,129,0.4) !important;
+    border: 1px solid rgba(16,185,129,0.35) !important;
     border-radius: 8px !important;
     font-size: 0.85rem !important;
-    padding: 6px 16px !important;
+    font-family: 'DM Sans', sans-serif !important;
+    padding: 6px 18px !important;
+    float: right !important;
 }
 [data-testid="stFileUploaderDropzoneInstructions"] p,
 [data-testid="stFileUploaderDropzoneInstructions"] span {
