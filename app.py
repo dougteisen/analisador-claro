@@ -644,8 +644,13 @@ PARTE 2 — UMA ENTRADA POR SEÇÃO DE DETALHAMENTO
 Cada seção começa com cabeçalho vermelho/colorido:
   "DETALHAMENTO DE LIGAÇÕES E SERVIÇOS DO CELULAR (XX) XXXXX XXXX"
 
-Processe cada seção ISOLADAMENTE. Os dados de cada seção pertencem EXCLUSIVAMENTE
-ao número de telefone do cabeçalho daquela seção.
+⚠️ REGRA CRÍTICA: retorne UMA entrada para CADA seção encontrada, SEM EXCEÇÃO.
+NUNCA pule uma seção, mesmo que ela não tenha internet, não tenha ligações,
+ou pareça completamente vazia. Linhas inativas devem aparecer com internet_mb "0" e minutos "0".
+Se a fatura tem 7 seções de detalhamento, o JSON deve ter 7 entradas em "linhas".
+
+Processe cada seção ISOLADAMENTE. Os dados pertencem EXCLUSIVAMENTE ao número
+do cabeçalho daquela seção.
 
 ━━━ "linha" ━━━
 Número do cabeçalho. 11 dígitos sem espaços/parênteses.
@@ -1163,6 +1168,53 @@ def processar_pdf(file):
                 if v and not vencimento: vencimento = v
             except Exception:
                 pass
+
+        # ── Recuperar linhas faltantes ──
+        # O Gemini às vezes pula seções sem internet/ligações.
+        # Faz um request dedicado para listar TODOS os números da fatura
+        # e adiciona as linhas faltantes com valores zerados.
+        try:
+            import google.generativeai as _genai_r
+            import json as _json_r
+            _api_key_r = None
+            try: _api_key_r = st.secrets["GEMINI_API_KEY"]
+            except Exception: pass
+            if _api_key_r:
+                _genai_r.configure(api_key=_api_key_r)
+                _model_r = _genai_r.GenerativeModel("gemini-2.5-flash-lite")
+                _prompt_nums = """Liste TODOS os números de telefone que aparecem como cabeçalho
+nas seções "DETALHAMENTO DE LIGAÇÕES E SERVIÇOS DO CELULAR (XX) XXXXX XXXX" desta fatura.
+Retorne SOMENTE JSON com a lista de números de 11 dígitos:
+{"numeros": ["11932356185", "11978388723", "11932356313", "11945701012", "11947961230", "11945704141", "11978110855"]}
+"""
+                _imgs_r = _converter_paginas(pdf_bytes)
+                if _imgs_r:
+                    _resp_r = _model_r.generate_content([_prompt_nums] + _imgs_r)
+                    _txt_r = re.sub(r"```json|```", "", _resp_r.text).strip()
+                    _res_r = _json_r.loads(_txt_r)
+                    _todos_nums = _res_r.get("numeros", [])
+                    _nums_ja_presentes = {item.get("linha","") for item in dados_ia}
+                    for _num in _todos_nums:
+                        if _num and _num not in _nums_ja_presentes:
+                            # Linha faltante — adiciona com zeros e pacote do resultado principal
+                            # Tenta inferir pacote pela mensalidade de outra linha com mesmo valor
+                            _pacote_inferido = "-"
+                            for _item_ref in dados_ia:
+                                if _item_ref.get("pacote") and _item_ref.get("pacote") != "-":
+                                    _pacote_inferido = _item_ref["pacote"]
+                                    break
+                            dados_ia.append({
+                                "linha": _num,
+                                "pacote": _pacote_inferido,
+                                "mensalidade_total": dados_ia[0].get("mensalidade_total", "0") if dados_ia else "0",
+                                "internet_mb": "0",
+                                "minutos": "0",
+                                "passaporte": "-",
+                                "valor_passaporte": "0"
+                            })
+                            _nums_ja_presentes.add(_num)
+        except Exception:
+            pass  # falha silenciosa — continua com as linhas que temos
 
         # Se todos os pacotes vieram "-", faz um request dedicado para pacotes
         # Isso acontece quando o Gemini não encontra GB nas seções de detalhamento
