@@ -853,11 +853,13 @@ def _analisar_com_gemini(imgs: list) -> dict | None:
     """
     Usa Gemini para extrair dados das imagens.
     Retorna dict: {"cliente": ..., "vencimento": ..., "linhas": [...]}
-    Modelos (free tier): gemini-2.5-flash-lite → gemini-2.5-flash
-    Estratégia dupla:
-      1. Request principal: extrai todos os campos
-      2. Request de verificação: confirma apenas internet_mb via Subtotal
-         → usa sempre o maior valor (Subtotal >= linha Internet isolada)
+
+    Estratégia de blocos:
+    - Faturas grandes (>4 páginas) são processadas em blocos de 3 páginas
+    - Cada bloco tem contexto focado, reduzindo erros de cópia entre seções
+    - Capa (pág 1) é sempre incluída no primeiro bloco para metadados
+    - Resultados dos blocos são consolidados com deduplicação
+    - Verificação de internet_mb ao final com limite 1.5x
     """
     if not _GEMINI_DISPONIVEL:
         return None
@@ -877,6 +879,7 @@ def _analisar_com_gemini(imgs: list) -> dict | None:
     import time, json as _json
 
     MODELOS = ["gemini-2.5-flash-lite", "gemini-2.5-flash"]
+    BLOCO_SIZE = 3  # páginas por bloco
 
     def _deduplicar(lista):
         vistos, unicos = set(), []
@@ -904,15 +907,10 @@ def _analisar_com_gemini(imgs: list) -> dict | None:
                     raise
         return None
 
-    def _verificar_internet(model, imgs, linhas_resultado):
-        """
-        Segundo request focado só no Subtotal de Internet.
-        Corrige silenciosamente se o Gemini pegou só 'Internet' sem 'meses anteriores'.
-        Só substitui se o valor verificado for maior E plausível (≤ 3x o original),
-        evitando contaminação entre linhas quando o Gemini associa Subtotal errado.
-        """
+    def _verificar_internet(model, imgs_todas, linhas_resultado):
+        """Verifica Subtotal de internet. Aceita só se ≤ 1.5x o original."""
         try:
-            texto = _request_com_retry(model, imgs, _PROMPT_VERIFICAR_INTERNET)
+            texto = _request_com_retry(model, imgs_todas, _PROMPT_VERIFICAR_INTERNET)
             if not texto or texto == "QUOTA":
                 return
             texto_clean = re.sub(r"```json|```", "", texto).strip()
@@ -929,54 +927,78 @@ def _analisar_com_gemini(imgs: list) -> dict | None:
                 verif_norm = _normalizar_internet_mb_ia(mapa[num])
                 orig_f  = float(orig_norm.replace(".", "").replace(",", "."))
                 verif_f = float(verif_norm.replace(".", "").replace(",", "."))
-                # Só substitui se: (1) verificado é maior E (2) não mais que 1.5x o original
-                # 1.5x cobre "meses anteriores" legítimos (tipicamente 1.0x–1.3x)
-                # mas bloqueia contaminação entre linhas (tipicamente 1.9x ou mais)
                 if verif_f > orig_f and (orig_f == 0 or verif_f <= orig_f * 1.5):
                     item["internet_mb"] = mapa[num]
         except Exception:
-            pass  # falha silenciosa — mantém resultado original
+            pass
+
+    def _processar_em_blocos(model, imgs):
+        """
+        Processa a fatura em blocos de BLOCO_SIZE páginas.
+        Sempre inclui a pág 1 (capa) no primeiro bloco para metadados.
+        Retorna dict consolidado ou None se falhar.
+        """
+        n = len(imgs)
+        if n <= BLOCO_SIZE:
+            # Fatura pequena: processa tudo de uma vez
+            texto = _request_com_retry(model, imgs)
+            if texto == "QUOTA":
+                return "QUOTA"
+            return _parsear_json_ia(texto) if texto else None
+
+        # Fatura grande: divide em blocos
+        # Bloco 0: pág 1 (capa) + próximas páginas até BLOCO_SIZE
+        blocos = []
+        blocos.append(imgs[:BLOCO_SIZE])
+        i = BLOCO_SIZE
+        while i < n:
+            blocos.append(imgs[i:i+BLOCO_SIZE])
+            i += BLOCO_SIZE
+
+        cliente_final = ""
+        vencimento_final = ""
+        todas_linhas = []
+
+        for idx, bloco in enumerate(blocos):
+            texto = _request_com_retry(model, bloco)
+            if texto == "QUOTA":
+                return "QUOTA"
+            if not texto:
+                continue
+            res = _parsear_json_ia(texto)
+            if not res:
+                continue
+            # Metadados: pega do primeiro bloco que retornar
+            if not cliente_final and res.get("cliente"):
+                cliente_final = res["cliente"]
+            if not vencimento_final and res.get("vencimento"):
+                vencimento_final = res["vencimento"]
+            # Linhas: acumula de todos os blocos
+            todas_linhas.extend(res.get("linhas", []))
+
+        if not todas_linhas:
+            return None
+
+        return {
+            "cliente": cliente_final,
+            "vencimento": vencimento_final,
+            "linhas": _deduplicar(todas_linhas)
+        }
 
     for modelo_nome in MODELOS:
         try:
             model = genai.GenerativeModel(modelo_nome)
 
-            # Request principal
-            texto = _request_com_retry(model, imgs)
-            if texto == "QUOTA":
+            resultado = _processar_em_blocos(model, imgs)
+
+            if resultado == "QUOTA":
                 st.warning(f"⚠️ Modelo **{modelo_nome}** com quota atingida, tentando alternativa...")
                 continue
 
-            resultado = _parsear_json_ia(texto) if texto else None
-
             if resultado and resultado.get("linhas"):
-                resultado["linhas"] = _deduplicar(resultado["linhas"])
-                # Verificação de internet_mb (segundo request)
+                # Verificação de internet_mb usando todas as páginas
                 _verificar_internet(model, imgs, resultado["linhas"])
                 return resultado
-
-            # Fallback: divide em 2 metades se retornou vazio
-            metade = len(imgs) // 2
-            if metade > 0:
-                t1 = _request_com_retry(model, imgs[:metade])
-                t2 = _request_com_retry(model, imgs[metade:])
-                if t1 == "QUOTA" or t2 == "QUOTA":
-                    st.warning(f"⚠️ Modelo **{modelo_nome}** quota atingida, tentando alternativa...")
-                    continue
-                r1 = _parsear_json_ia(t1) if t1 else None
-                r2 = _parsear_json_ia(t2) if t2 else None
-                meta = r1 if isinstance(r1, dict) else (r2 if isinstance(r2, dict) else {})
-                l1 = (r1 or {}).get("linhas", [])
-                l2 = (r2 or {}).get("linhas", [])
-                combinado = l1 + l2
-                if combinado:
-                    linhas_finais = _deduplicar(combinado)
-                    _verificar_internet(model, imgs, linhas_finais)
-                    return {
-                        "cliente": meta.get("cliente", ""),
-                        "vencimento": meta.get("vencimento", ""),
-                        "linhas": linhas_finais
-                    }
 
         except Exception as e:
             err = str(e)
