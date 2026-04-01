@@ -974,6 +974,568 @@ Retorne o Subtotal exatamente como aparece na fatura. Se zero/ausente, retorne "
 """
 
 
+# ── Prompt exclusivo para plano compartilhado em PDF de imagem ───────────────
+_PROMPT_FATURA_COMPARTILHADA = """Você é um extrator especializado em faturas da Claro Empresas (Brasil).
+Esta fatura é de PLANO COMPARTILHADO. Siga as instruções abaixo com atenção.
+
+━━━ PARTE 1 — METADADOS DA CAPA (primeira página) ━━━
+- "cliente": razão social da empresa (ex: "CONFRUTY ALIMENTOS EIRELI"). NÃO use número de conta.
+- "vencimento": data de vencimento DD/MM/AAAA (ex: "24/03/2026")
+
+━━━ PARTE 2 — PLANO COMPARTILHADO (primeira página, seção "1. PLANO CONTRATADO") ━━━
+Procure a subseção "Compartilhado" e extraia:
+- "nome_plano_compartilhado": nome completo do plano. Ex: "Claro Total Compartilhado 150GB"
+  Está logo abaixo de "Oferta Conjunta Claro MIX" ou similar, antes do "[192]".
+  Exemplo de estrutura:
+    Compartilhado
+    Oferta Conjunta Claro MIX              310,28
+      Claro Total Compartilhado 150GB [192]       ← este é o nome (ignore o [192])
+      Aplicativos Digitais
+- "valor_plano_compartilhado": valor numérico na linha "Oferta Conjunta Claro MIX". Ex: "310,28"
+  Formato: vírgula decimal, sem R$. Este valor é cobrado UMA vez para toda a conta.
+
+━━━ PARTE 3 — UMA ENTRADA POR SEÇÃO DE DETALHAMENTO ━━━
+Cada seção começa com cabeçalho colorido:
+  "DETALHAMENTO DE LIGAÇÕES E SERVIÇOS DO CELULAR (XX) XXXXX XXXX"
+
+⚠️ REGRA ABSOLUTA: retorne UMA entrada para CADA seção, SEM EXCEÇÃO.
+NUNCA pule uma seção. Seções sem uso → internet_mb "0" e minutos "0".
+Conte as seções antes de montar o JSON e confirme que o número de entradas bate.
+Processe cada seção ISOLADAMENTE.
+
+━━━ "linha" ━━━
+Número do cabeçalho da seção. 11 dígitos, sem espaços/parênteses.
+"(11) 99946 5790" → "11999465790"
+
+━━━ "mensalidade_individual" ━━━
+DENTRO desta seção, em "Mensalidades e Pacotes Promocionais":
+Procure "Oferta Claro Total Mix Plugin Smartphone" e o valor numérico na mesma linha.
+Exemplo:
+  Oferta Claro Total Mix Plugin Smartphone    21,37
+    Assinatura Smartphone [192]                  –
+    Aplicativos Digitais                         –
+  TOTAL                                       R$ 21,37
+Use o valor do TOTAL desta subseção (ex: "21,37"). Formato: vírgula decimal, sem R$.
+⚠️ O valor pode variar entre linhas (ex: "19,99" para uma linha, "21,37" para outras).
+⚠️ NUNCA copie o valor de outra seção. Leia dentro desta seção específica.
+
+━━━ "internet_mb" ━━━
+DENTRO desta seção, em "Serviços (Torpedos, Hits, Jogos, etc.) → Internet (MB)":
+  Serviço                  Mbytes Utilizados
+  Internet                       535.753
+  Internet – meses ant.           42.204
+  Subtotal                       577.957   ← USE ESTE (se existir)
+
+Regras em ordem de prioridade:
+1. Use "Subtotal" se existir
+2. Some "Internet" + "Internet – meses anteriores" se não houver Subtotal
+3. Use só "Internet" se não houver meses anteriores
+4. Retorne "0" se não houver seção Internet nesta seção
+
+⚠️ NUNCA use valores da tabela "Detalhes da Internet móvel" (datas diárias).
+Retorne como STRING com pontos: "535.753", "13.390", "0"
+
+━━━ "minutos" ━━━
+Linha "TOTAL" do rodapé desta seção, coluna "Duração".
+Exemplos: "15min6s", "393min42s", "28min42s", "0".
+⚠️ Cada seção tem seu TOTAL próprio. NÃO copie de outra seção.
+Se não houver ligações, retorne "0".
+
+━━━ "passaporte" / "valor_passaporte" ━━━
+Se houver "Claro Passaporte" em Mensalidades → nome completo e valor numérico.
+Senão: "-" e "0".
+
+━━━ SAÍDA ━━━
+SOMENTE JSON válido, sem markdown, sem texto extra.
+
+{
+  "tipo": "compartilhado",
+  "cliente": "CONFRUTY ALIMENTOS EIRELI",
+  "vencimento": "24/03/2026",
+  "nome_plano_compartilhado": "Claro Total Compartilhado 150GB",
+  "valor_plano_compartilhado": "310,28",
+  "linhas": [
+    {
+      "linha": "11919030001",
+      "mensalidade_individual": "19,99",
+      "internet_mb": "33.511",
+      "minutos": "0",
+      "passaporte": "-",
+      "valor_passaporte": "0"
+    },
+    {
+      "linha": "11932104461",
+      "mensalidade_individual": "21,37",
+      "internet_mb": "1.000.621",
+      "minutos": "23min",
+      "passaporte": "-",
+      "valor_passaporte": "0"
+    }
+  ]
+}
+"""
+
+# ── Prompt de verificação de internet para plano compartilhado ───────────────
+_PROMPT_VERIFICAR_INTERNET_COMPARTILHADO = """Analise esta fatura Claro Empresas (plano compartilhado).
+Para CADA seção "DETALHAMENTO DE LIGAÇÕES E SERVIÇOS DO CELULAR (XX) XXXXX XXXX":
+
+Encontre DENTRO DESTA SEÇÃO a subseção "Internet (MB)" com esta estrutura:
+  Serviço              Mbytes Utilizados
+  Internet                   535.753
+  Internet – meses ant.       42.204
+  Subtotal                   577.957   ← retorne este valor
+
+Regras:
+1. Use "Subtotal" quando existir
+2. Se não houver Subtotal: some "Internet" + "Internet – meses anteriores"
+3. Se só houver "Internet": use esse valor
+4. Se não houver seção Internet: retorne "0"
+
+⚠️ NUNCA use valores da tabela de datas diárias ("Detalhes da Internet móvel").
+⚠️ Cada número de linha tem seus próprios valores — não misture entre seções.
+
+Retorne SOMENTE JSON:
+[
+  {"linha": "11919030001", "internet_mb": "33.511"},
+  {"linha": "11932104461", "internet_mb": "1.000.621"}
+]
+
+Retorne o Subtotal exatamente como aparece na fatura. Se zero/ausente, retorne "0".
+"""
+
+
+def _analisar_compartilhado_com_anthropic(imgs: list) -> dict | None:
+    """
+    Usa Claude Sonnet para extrair dados de fatura compartilhada em PDF de imagem.
+    Mesmo mecanismo de _analisar_com_anthropic, com prompt especializado.
+    """
+    import requests as _req, base64
+    try:
+        api_key = None
+        try:
+            api_key = st.secrets["ANTHROPIC_API_KEY"]
+        except Exception:
+            pass
+        if not api_key:
+            return None
+
+        def img_to_b64(img):
+            buf = io.BytesIO()
+            img.save(buf, format="JPEG", quality=85)
+            return base64.b64encode(buf.getvalue()).decode()
+
+        content = [{"type": "text", "text": _PROMPT_FATURA_COMPARTILHADA}]
+        for img in imgs:
+            content.append({
+                "type": "image",
+                "source": {"type": "base64", "media_type": "image/jpeg", "data": img_to_b64(img)}
+            })
+
+        resp = _req.post(
+            "https://api.anthropic.com/v1/messages",
+            headers={
+                "Content-Type": "application/json",
+                "anthropic-version": "2023-06-01",
+                "x-api-key": api_key,
+            },
+            json={"model": "claude-sonnet-4-20250514", "max_tokens": 4000,
+                  "messages": [{"role": "user", "content": content}]},
+            timeout=180
+        )
+        if resp.status_code != 200:
+            return None
+        texto = "".join(b["text"] for b in resp.json().get("content", []) if b.get("type") == "text")
+        return _parsear_json_compartilhado(texto)
+    except Exception:
+        return None
+
+
+def _analisar_compartilhado_com_gemini(imgs: list) -> dict | None:
+    """
+    Usa Gemini para extrair dados de fatura compartilhada em PDF de imagem.
+    Mesmo mecanismo de _analisar_com_gemini, com prompt e verificação especializados.
+    """
+    if not _GEMINI_DISPONIVEL:
+        return None
+
+    api_key = None
+    try:
+        api_key = st.secrets["GEMINI_API_KEY"]
+    except Exception:
+        try:
+            api_key = st.secrets["GOOGLE_GEMINI_KEY"]
+        except Exception:
+            pass
+    if not api_key:
+        return None
+
+    genai.configure(api_key=api_key)
+    import time, json as _json
+
+    MODELOS = ["gemini-2.5-flash-lite", "gemini-2.5-flash"]
+
+    def _deduplicar(lista):
+        vistos, unicos = set(), []
+        for item in lista:
+            k = item.get("linha", "")
+            if k and k not in vistos:
+                vistos.add(k)
+                unicos.append(item)
+        return unicos
+
+    def _request_com_retry(model, paginas, prompt=None):
+        p = prompt or _PROMPT_FATURA_COMPARTILHADA
+        for tentativa in range(3):
+            try:
+                resp = model.generate_content([p] + paginas)
+                return resp.text
+            except Exception as e:
+                err = str(e)
+                is_quota = any(x in err for x in ["429", "RESOURCE_EXHAUSTED", "quota"])
+                if is_quota and tentativa < 2:
+                    time.sleep(15 * (2 ** tentativa))
+                elif is_quota:
+                    return "QUOTA"
+                else:
+                    raise
+        return None
+
+    def _verificar_internet_compartilhado(model, imgs, linhas_resultado):
+        """Segundo request focado só no Subtotal de internet para plano compartilhado."""
+        try:
+            texto = _request_com_retry(model, imgs, _PROMPT_VERIFICAR_INTERNET_COMPARTILHADO)
+            if not texto or texto == "QUOTA":
+                return
+            texto_clean = re.sub(r"```json|```", "", texto).strip()
+            lista = _json.loads(texto_clean)
+            if not isinstance(lista, list):
+                return
+            mapa = {item["linha"]: item["internet_mb"]
+                    for item in lista if "linha" in item and "internet_mb" in item}
+            for item in linhas_resultado:
+                num = item.get("linha", "")
+                if num not in mapa:
+                    continue
+                orig_norm  = _normalizar_internet_mb_ia(item.get("internet_mb", "0"))
+                verif_norm = _normalizar_internet_mb_ia(mapa[num])
+                orig_f  = float(orig_norm.replace(".", "").replace(",", "."))
+                verif_f = float(verif_norm.replace(".", "").replace(",", "."))
+                if verif_f > orig_f and (orig_f == 0 or verif_f <= orig_f * 1.5):
+                    item["internet_mb"] = mapa[num]
+        except Exception:
+            pass
+
+    for modelo_nome in MODELOS:
+        try:
+            model = genai.GenerativeModel(modelo_nome)
+            texto = _request_com_retry(model, imgs)
+            if texto == "QUOTA":
+                st.warning(f"⚠️ Modelo **{modelo_nome}** com quota atingida, tentando alternativa...")
+                continue
+
+            resultado = _parsear_json_compartilhado(texto) if texto else None
+
+            if resultado and resultado.get("linhas"):
+                resultado["linhas"] = _deduplicar(resultado["linhas"])
+                _verificar_internet_compartilhado(model, imgs, resultado["linhas"])
+                return resultado
+
+            # Fallback: divide em 2 metades
+            metade = len(imgs) // 2
+            if metade > 0:
+                t1 = _request_com_retry(model, imgs[:metade])
+                t2 = _request_com_retry(model, imgs[metade:])
+                if t1 == "QUOTA" or t2 == "QUOTA":
+                    st.warning(f"⚠️ Modelo **{modelo_nome}** quota atingida, tentando alternativa...")
+                    continue
+                r1 = _parsear_json_compartilhado(t1) if t1 else None
+                r2 = _parsear_json_compartilhado(t2) if t2 else None
+                meta = r1 if isinstance(r1, dict) else (r2 if isinstance(r2, dict) else {})
+                l1 = (r1 or {}).get("linhas", [])
+                l2 = (r2 or {}).get("linhas", [])
+                combinado = l1 + l2
+                if combinado:
+                    linhas_finais = _deduplicar(combinado)
+                    _verificar_internet_compartilhado(model, imgs, linhas_finais)
+                    return {
+                        "tipo": "compartilhado",
+                        "cliente": meta.get("cliente", ""),
+                        "vencimento": meta.get("vencimento", ""),
+                        "nome_plano_compartilhado": meta.get("nome_plano_compartilhado", ""),
+                        "valor_plano_compartilhado": meta.get("valor_plano_compartilhado", "0"),
+                        "linhas": linhas_finais
+                    }
+
+        except Exception as e:
+            err = str(e)
+            if any(x in err for x in ["429", "RESOURCE_EXHAUSTED", "quota", "not found", "404"]):
+                st.warning(f"⚠️ Modelo **{modelo_nome}** indisponível, tentando alternativa...")
+                continue
+            st.warning(f"⚠️ Gemini ({modelo_nome}): {e}")
+            return None
+
+    st.error(
+        "❌ **Quota do Gemini esgotada.** Soluções:\n"
+        "- Aguarde o reset (~04h Brasília)\n"
+        "- Configure `ANTHROPIC_API_KEY` nos Secrets como alternativa\n"
+        "- Ative faturamento em [aistudio.google.com](https://aistudio.google.com/app/billing)"
+    )
+    return None
+
+
+def _parsear_json_compartilhado(texto: str) -> dict | None:
+    """
+    Extrai e valida JSON de fatura compartilhada.
+    Retorna dict com: tipo, cliente, vencimento, nome_plano_compartilhado,
+                      valor_plano_compartilhado, linhas[].
+    """
+    import json as _json
+    try:
+        texto = re.sub(r"```json|```", "", texto).strip()
+        resultado = _json.loads(texto)
+        if not isinstance(resultado, dict):
+            return None
+        # Valida campos obrigatórios
+        if not resultado.get("linhas"):
+            return None
+        # Garante que tipo está marcado
+        resultado["tipo"] = "compartilhado"
+        return resultado
+    except Exception:
+        return None
+
+
+def analisar_pdf_compartilhado_com_ia(pdf_bytes: bytes) -> dict | None:
+    """
+    Extrai dados de PDF-imagem de plano compartilhado com IA.
+    Usa prompt especializado _PROMPT_FATURA_COMPARTILHADA.
+    Ordem: Claude Sonnet (primário) → Gemini (fallback).
+    """
+    imgs = _converter_paginas(pdf_bytes)
+    if not imgs:
+        st.error("❌ Não foi possível converter as páginas do PDF em imagens.")
+        return None
+
+    _tem_anthropic = False
+    try:
+        _tem_anthropic = bool(st.secrets["ANTHROPIC_API_KEY"])
+    except Exception:
+        pass
+
+    if _tem_anthropic:
+        resultado = _analisar_compartilhado_com_anthropic(imgs)
+        if resultado:
+            return resultado
+        resultado = _analisar_compartilhado_com_gemini(imgs)
+        if resultado:
+            return resultado
+    else:
+        resultado = _analisar_compartilhado_com_gemini(imgs)
+        if resultado:
+            return resultado
+
+    st.error(
+        "❌ Não foi possível analisar o PDF compartilhado com IA.\n"
+        "Verifique **GEMINI_API_KEY** ou **ANTHROPIC_API_KEY** nos Secrets."
+    )
+    return None
+
+
+def processar_pdf_compartilhado_imagem(resultado_ia: dict, cliente: str, vencimento: str) -> tuple:
+    """
+    Processa resultado da IA para fatura de plano compartilhado em PDF de imagem.
+    Retorna (DataFrame, cliente, vencimento) no mesmo formato que processar_pdf_compartilhado.
+    NUNCA altera processar_pdf_compartilhado (digital) nem o fluxo individual.
+    """
+    nome_plano  = resultado_ia.get("nome_plano_compartilhado", "Claro Total Compartilhado").strip()
+    valor_str   = resultado_ia.get("valor_plano_compartilhado", "0")
+    valor_plano = to_float(valor_str)
+    dados_ia    = resultado_ia.get("linhas", [])
+
+    dados = []
+    for item in dados_ia:
+        mensalidade_ind = to_float(item.get("mensalidade_individual", "0"))
+        valor_pass      = to_float(item.get("valor_passaporte", "0"))
+        total_linha     = mensalidade_ind + valor_pass
+        internet_raw    = _normalizar_internet_mb_ia(item.get("internet_mb", "0"))
+
+        dados.append({
+            "Linha":                  item.get("linha", ""),
+            "Internet (MB)":          internet_raw,
+            "Internet (MB) fmt":      "",           # preenchido após conversão
+            "Pacote de dados":        nome_plano,
+            "Mensalidade":            f"R$ {mensalidade_ind:.2f}".replace(".", ","),
+            "Passaporte":             item.get("passaporte", "-"),
+            "Mensalidade Passaporte": f"R$ {valor_pass:.2f}".replace(".", ",") if valor_pass else "-",
+            "Total por linha":        f"R$ {total_linha:.2f}".replace(".", ","),
+            "Minutos":                item.get("minutos", "0"),
+        })
+
+    df = pd.DataFrame(dados)
+
+    # Converte Internet (MB) para float — mesmo pipeline do fluxo digital
+    df["Internet (MB)"] = (
+        df["Internet (MB)"]
+        .astype(str)
+        .str.replace(".", "", regex=False)
+        .str.replace(",", ".", regex=False)
+    )
+    df["Internet (MB)"] = pd.to_numeric(df["Internet (MB)"], errors="coerce").fillna(0)
+    df["Internet (MB) fmt"] = df["Internet (MB)"].apply(_fmt_mb_display)
+
+    # Classificação de perfil — idêntica a processar_pdf_compartilhado
+    franquia_total_mb = extrair_gb_pacote(nome_plano) * 1024
+
+    def classificar_compartilhado(mb):
+        if mb == 0:
+            return "⚪ Baixo"
+        n = max(len(dados), 1)
+        media_esperada = franquia_total_mb / n if franquia_total_mb > 0 else 0
+        if media_esperada == 0:
+            gb = mb / 1024
+            if gb < 1:   return "⚪ Baixo"
+            if gb < 5:   return "🟡 Médio"
+            return "🔴 Alto"
+        ratio = mb / media_esperada
+        if ratio < 0.3:  return "⚪ Baixo"
+        if ratio < 0.8:  return "🟡 Médio"
+        return "🔴 Alto"
+
+    df["Perfil"] = df["Internet (MB)"].apply(classificar_compartilhado)
+
+    def em_uso_compartilhado(row):
+        minutos_str = str(row["Minutos"]).strip().lower()
+        sem_minutos = re.fullmatch(r"0[^\d]*|", minutos_str) is not None
+        if row["Internet (MB)"] == 0 and sem_minutos:
+            return "Não"
+        return "Sim"
+
+    df["Em Uso"] = df.apply(em_uso_compartilhado, axis=1)
+
+    def estrategia_compartilhado(row):
+        if row["Em Uso"] == "Não":
+            return "⚪ Manter"
+        if "Baixo" in row["Perfil"]:
+            return "🟡 Sustentar plano"
+        if "Médio" in row["Perfil"]:
+            return "🟢 Bem dimensionado"
+        if "Alto" in row["Perfil"]:
+            return "🟢 Bem dimensionado"
+        return ""
+
+    df["Estratégia Comercial"] = df.apply(estrategia_compartilhado, axis=1)
+
+    # Linha extra azul — idêntica a processar_pdf_compartilhado
+    linha_plano = {
+        "Linha":                  "PLANO COMPARTILHADO",
+        "Internet (MB)":          0.0,
+        "Internet (MB) fmt":      "-",
+        "Pacote de dados":        nome_plano,
+        "Mensalidade":            f"R$ {valor_plano:.2f}".replace(".", ","),
+        "Passaporte":             "-",
+        "Mensalidade Passaporte": "-",
+        "Total por linha":        f"R$ {valor_plano:.2f}".replace(".", ","),
+        "Minutos":                "-",
+        "Perfil":                 "-",
+        "Em Uso":                 "-",
+        "Estratégia Comercial":   "-",
+    }
+    df = pd.concat([df, pd.DataFrame([linha_plano])], ignore_index=True)
+
+    return df, cliente, vencimento
+
+
+def _detectar_plano_compartilhado_ia(resultado_ia: dict) -> bool:
+    """
+    Detecta plano compartilhado em resultado da IA.
+    Critério: campo 'tipo' == 'compartilhado' OU presença de 'nome_plano_compartilhado'.
+    """
+    if resultado_ia.get("tipo") == "compartilhado":
+        return True
+    if resultado_ia.get("nome_plano_compartilhado"):
+        return True
+    return False
+
+
+def _detectar_plano_compartilhado_capa_ia(pdf_bytes: bytes) -> bool:
+    """
+    Leitura rápida da capa (página 1) com pdfplumber para detectar plano compartilhado
+    antes de chamar a IA cara — evita chamar o prompt errado.
+    Retorna True se encontrar indicadores de plano compartilhado.
+    Fallback seguro: retorna False se não conseguir ler.
+    """
+    try:
+        with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
+            texto_capa = (pdf.pages[0].extract_text() or "") if pdf.pages else ""
+        # Para PDF de imagem pdfplumber retorna vazio — usamos detecção fraca
+        # mas suficiente para o sinal positivo
+        if texto_capa and _detectar_plano_compartilhado(texto_capa):
+            return True
+    except Exception:
+        pass
+    return False
+
+
+def _analisar_pdf_imagem_detectando_tipo(pdf_bytes: bytes) -> dict | None:
+    """
+    Analisa PDF de imagem detectando automaticamente o tipo de plano.
+
+    Estratégia de detecção (custo zero extra):
+    1. Tenta ler capa com pdfplumber (funciona se PDF tiver qualquer texto embutido)
+    2. Chama IA com prompt correto:
+       - Se compartilhado detectado → _PROMPT_FATURA_COMPARTILHADA
+       - Caso contrário → _PROMPT_FATURA (individual)
+    3. Após retorno da IA, valida o campo 'tipo' do JSON para confirmação.
+
+    Retorna dict com campo 'tipo': 'compartilhado' | 'individual'
+    """
+    # Tentativa de detecção via pdfplumber antes de chamar IA
+    eh_compartilhado = _detectar_plano_compartilhado_capa_ia(pdf_bytes)
+
+    imgs = _converter_paginas(pdf_bytes)
+    if not imgs:
+        return None
+
+    _tem_anthropic = False
+    try:
+        _tem_anthropic = bool(st.secrets["ANTHROPIC_API_KEY"])
+    except Exception:
+        pass
+
+    if eh_compartilhado:
+        # Usa prompt compartilhado diretamente
+        if _tem_anthropic:
+            resultado = _analisar_compartilhado_com_anthropic(imgs)
+            if resultado:
+                return resultado
+            return _analisar_compartilhado_com_gemini(imgs)
+        else:
+            return _analisar_compartilhado_com_gemini(imgs)
+    else:
+        # PDF de imagem sem texto → não sabemos o tipo com certeza.
+        # Tenta prompt individual primeiro. Se retornar campo 'tipo'=='compartilhado',
+        # reanalisa com prompt compartilhado.
+        if _tem_anthropic:
+            resultado = _analisar_com_anthropic(imgs)
+        else:
+            resultado = _analisar_com_gemini(imgs)
+
+        if not resultado:
+            return None
+
+        # Verifica se a IA sinalizou compartilhado no retorno
+        if _detectar_plano_compartilhado_ia(resultado):
+            # Reanalisa com prompt especializado
+            if _tem_anthropic:
+                r2 = _analisar_compartilhado_com_anthropic(imgs)
+                return r2 if r2 else resultado
+            else:
+                r2 = _analisar_compartilhado_com_gemini(imgs)
+                return r2 if r2 else resultado
+
+        return resultado
+
+
 def _normalizar_internet_mb_ia(valor) -> str:
     """
     Normaliza internet_mb da IA para formato pipeline BR: '7526,866'
@@ -1357,14 +1919,14 @@ def processar_pdf(file):
             })
 
     else:
-        # ── PDF imagem: IA com dupla verificação ──
+        # ── PDF imagem: IA com detecção de tipo e dupla verificação ──
         if not _PDF2IMAGE_DISPONIVEL:
             raise ValueError("pdf2image não instalado. Adicione ao requirements.txt e poppler-utils ao packages.txt.")
 
         placeholder.text("🖼️ PDF de imagem — analisando com IA (pode levar ~30s)...")
         progresso = st.progress(0.1)
 
-        resultado_ia = analisar_pdf_imagem_com_ia(pdf_bytes)
+        resultado_ia = _analisar_pdf_imagem_detectando_tipo(pdf_bytes)
 
         progresso.progress(1.0)
         progresso.empty()
@@ -1373,7 +1935,6 @@ def processar_pdf(file):
         if not resultado_ia:
             raise ValueError("Não foi possível extrair dados com IA. Verifique a chave GEMINI_API_KEY nos Secrets.")
 
-        dados_ia   = resultado_ia.get("linhas", [])
         cliente    = resultado_ia.get("cliente", "").strip().upper() or "CLIENTE"
         vencimento = resultado_ia.get("vencimento", "").strip()
 
@@ -1394,8 +1955,13 @@ def processar_pdf(file):
             except Exception:
                 pass
 
-        # Se todos os pacotes vieram "-" ou bundle sem GB, não há o que corrigir
-        # sem risco de inventar dados. Mantém como está.
+        # ── Desvio para processador de plano compartilhado (imagem) ──
+        # Não toca em processar_pdf_compartilhado (digital) nem no fluxo individual.
+        if _detectar_plano_compartilhado_ia(resultado_ia):
+            return processar_pdf_compartilhado_imagem(resultado_ia, cliente, vencimento)
+
+        # ── Fluxo individual imagem (original, intocado) ──
+        dados_ia = resultado_ia.get("linhas", [])
 
         dados = []
         for item in dados_ia:
