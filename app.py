@@ -170,6 +170,18 @@ hr {
     background: transparent !important;
     border: none !important;
 }
+/* Corrige botão duplicado em versões recentes do Streamlit */
+[data-testid="stFileUploaderDropzone"] button:not(:first-of-type) {
+    display: none !important;
+}
+[data-testid="stFileUploaderDropzone"] button {
+    background: rgba(16,185,129,0.15) !important;
+    color: #10b981 !important;
+    border: 1px solid rgba(16,185,129,0.4) !important;
+    border-radius: 8px !important;
+    font-size: 0.85rem !important;
+    padding: 6px 16px !important;
+}
 [data-testid="stFileUploaderDropzoneInstructions"] p,
 [data-testid="stFileUploaderDropzoneInstructions"] span {
     color: #94a3b8 !important;
@@ -1675,5 +1687,3 @@ if uploaded_files:
                 file_name=nome_arquivo,
                 use_container_width=True,
             )
-
-
