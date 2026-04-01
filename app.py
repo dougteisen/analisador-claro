@@ -621,12 +621,108 @@ def extrair_detalhamento(blocos: dict) -> dict:
         }
     return mapa
 
+def to_float(valor) -> float:
+    try:
+        return float(str(valor).replace(".", "").replace(",", "."))
+    except (ValueError, TypeError):
+        return 0.0
+
+def extrair_gb_pacote(pacote: str) -> int:
+    m = re.search(r"(\d+)\s*GB", str(pacote))
+    return int(m.group(1)) if m else 0
+
+# ===== ANÁLISE VIA IA — Gemini Vision (gratuito) ou Anthropic (pago) ==========
+
+_PROMPT_FATURA = """Você é um extrator especializado em faturas da Claro Empresas (Brasil).
+
+PARTE 1 — METADADOS DA CAPA
+Extraia da primeira página:
+- "cliente": razão social do cliente (ex: "JO PNEUS LTDA"). NÃO use número de conta.
+- "vencimento": data de vencimento formato DD/MM/AAAA (ex: "28/03/2026")
+
+PARTE 2 — DETALHAMENTO POR LINHA
+Extraia dados SOMENTE das seções com cabeçalho vermelho:
+"DETALHAMENTO DE LIGAÇÕES E SERVIÇOS DO CELULAR (XX) XXXXX XXXX"
+Cada seção pertence a UMA linha. Não misture dados entre seções.
+Ignore: resumo geral, plano contratado, cobranças por celular, boleto, nota fiscal.
+
+Para CADA seção de detalhamento:
+
+CAMPO "linha": número do cabeçalho, 11 dígitos sem espaços/parênteses.
+  Ex: "(11) 98936 0484" → "11989360484"
+
+CAMPO "pacote": em "Mensalidades e Pacotes Promocionais", procure a linha indentada
+  com GB (ex: "Claro Pós 10GB", "Claro Pós 20GB"). NÃO use "Oferta Conjunta Claro MIX".
+  Validação: mensalidade R$44,99 → "Claro Pós 10GB" | R$54,99 → "Claro Pós 20GB".
+  CADA seção tem seu próprio pacote. Se não encontrar, use "-".
+
+CAMPO "mensalidade_total": valor "TOTAL" em "Mensalidades e Pacotes Promocionais".
+  Formato: "44,99" (vírgula decimal, sem R$).
+
+CAMPO "internet_mb": ⚠️ ATENÇÃO — ERRO COMUM AQUI
+  Na subseção "Serviços (Torpedos, Hits, Jogos, etc.) → Internet (MB)" desta seção,
+  você verá uma tabela como esta:
+
+    Serviço                        Mbytes Utilizados
+    Internet                           788.710
+    Internet – meses anteriores     13.634.990
+    Subtotal                        14.423.700   ← USE SEMPRE ESTE VALOR
+
+  ⚠️ REGRA: use SEMPRE o valor "Subtotal" — ele é a soma correta.
+  NUNCA use apenas a linha "Internet" isolada.
+  Se não houver "Subtotal", some "Internet" + "Internet – meses anteriores".
+  Retorne como STRING exatamente como aparece na fatura: "14.423.700", "7.526.866"
+  NÃO remova os pontos. NÃO converta para inteiro.
+
+CAMPO "minutos": duração total de ligações desta seção.
+  Leia a coluna "Duração" na linha "Total" do RODAPÉ DESTA SEÇÃO.
+  Formato: "26min12s", "46min36s", ou "0".
+  ⚠️ Cada seção tem seu próprio total — não repita o mesmo valor entre seções.
+
+CAMPO "passaporte": nome do passaporte Claro se houver, senão "-"
+CAMPO "valor_passaporte": valor R$ (ex: "14,99"), senão "0"
+
+SAÍDA: SOMENTE JSON válido, sem markdown, sem texto antes ou depois.
+
+{
+  "cliente": "JO PNEUS LTDA",
+  "vencimento": "28/03/2026",
+  "linhas": [
+    {
+      "linha": "11989360484",
+      "pacote": "Claro Pós 10GB",
+      "mensalidade_total": "44,99",
+      "internet_mb": "7.526.866",
+      "minutos": "26min12s",
+      "passaporte": "-",
+      "valor_passaporte": "0"
+    }
+  ]
+}
+"""
+
+_PROMPT_VERIFICAR_INTERNET = """Analise esta fatura Claro Empresas.
+Para CADA seção "DETALHAMENTO DE LIGAÇÕES E SERVIÇOS DO CELULAR", encontre a subseção
+"Internet (MB)" e retorne o valor da linha "Subtotal" de Mbytes Utilizados.
+Se não houver "Subtotal", some "Internet" + "Internet – meses anteriores".
+
+Retorne SOMENTE JSON, sem markdown:
+[
+  {"linha": "11989360484", "internet_mb": "7.526.866"},
+  {"linha": "11989362092", "internet_mb": "946.122"},
+  {"linha": "11989362326", "internet_mb": "14.423.700"}
+]
+
+Retorne o valor exatamente como aparece (com pontos de milhar). Uma entrada por linha.
+"""
+
+
 def _normalizar_internet_mb_ia(valor) -> str:
     """
     Normaliza internet_mb da IA para formato pipeline BR: '7526,866'
-    Trata todos os formatos que o Gemini pode retornar:
-      '14.423,700' → '14423,700'  | '14423.700' → '14423,700'
-      '14423700'   → '14423,700'  | '7.526.866' → '7526,866'
+    Trata todos os formatos possíveis:
+      '14.423.700' → '14423,700' | '14423.700' → '14423,700'
+      '14423700'   → '14423,700' | '946,122'   → '946,122'
     """
     s = str(valor).strip()
     if ',' in s:
@@ -682,200 +778,6 @@ def _validar_pacote_ia(pacote: str, mensalidade_total: str) -> str:
     return pacote
 
 
-def _analisar_com_gemini(imgs: list) -> dict | None:
-    """
-    Usa Gemini para extrair dados das imagens.
-    Retorna dict: {"cliente": ..., "vencimento": ..., "linhas": [...]}
-    Modelos: gemini-2.5-flash-lite → gemini-2.5-flash
-    """
-    if not _GEMINI_DISPONIVEL:
-        return None
-
-    api_key = None
-    try:
-        api_key = st.secrets["GEMINI_API_KEY"]
-    except Exception:
-        try:
-            api_key = st.secrets["GOOGLE_GEMINI_KEY"]
-        except Exception:
-            pass
-    if not api_key:
-        return None
-
-    genai.configure(api_key=api_key)
-    import time
-
-    MODELOS = ["gemini-2.5-flash-lite", "gemini-2.5-flash"]
-
-    def _deduplicar(lista):
-        vistos, unicos = set(), []
-        for item in lista:
-            k = item.get("linha", "")
-            if k and k not in vistos:
-                vistos.add(k)
-                unicos.append(item)
-        return unicos
-
-    def _request_com_retry(model, paginas):
-        for tentativa in range(3):
-            try:
-                resp = model.generate_content([_PROMPT_FATURA] + paginas)
-                return _parsear_json_ia(resp.text)
-            except Exception as e:
-                err = str(e)
-                is_quota = any(x in err for x in ["429", "RESOURCE_EXHAUSTED", "quota"])
-                if is_quota and tentativa < 2:
-                    time.sleep(15 * (2 ** tentativa))
-                elif is_quota:
-                    return "QUOTA"
-                else:
-                    raise
-        return None
-
-    for modelo_nome in MODELOS:
-        try:
-            model = genai.GenerativeModel(modelo_nome)
-            resultado = _request_com_retry(model, imgs)
-
-            if resultado == "QUOTA":
-                st.warning(f"⚠️ Modelo **{modelo_nome}** com quota atingida, tentando alternativa...")
-                continue
-
-            if resultado and resultado.get("linhas"):
-                resultado["linhas"] = _deduplicar(resultado["linhas"])
-                return resultado
-
-            # Fallback: divide em 2 metades se retornou vazio
-            metade = len(imgs) // 2
-            if metade > 0:
-                r1 = _request_com_retry(model, imgs[:metade])
-                r2 = _request_com_retry(model, imgs[metade:])
-                if r1 == "QUOTA" or r2 == "QUOTA":
-                    st.warning(f"⚠️ Modelo **{modelo_nome}** quota atingida, tentando alternativa...")
-                    continue
-                meta = r1 if isinstance(r1, dict) else (r2 if isinstance(r2, dict) else {})
-                l1 = (r1 or {}).get("linhas", []) if isinstance(r1, dict) else []
-                l2 = (r2 or {}).get("linhas", []) if isinstance(r2, dict) else []
-                combinado = l1 + l2
-                if combinado:
-                    return {
-                        "cliente": meta.get("cliente", ""),
-                        "vencimento": meta.get("vencimento", ""),
-                        "linhas": _deduplicar(combinado)
-                    }
-
-        except Exception as e:
-            err = str(e)
-            if any(x in err for x in ["429", "RESOURCE_EXHAUSTED", "quota", "not found", "404"]):
-                st.warning(f"⚠️ Modelo **{modelo_nome}** indisponível, tentando alternativa...")
-                continue
-            st.warning(f"⚠️ Gemini ({modelo_nome}): {e}")
-            return None
-
-    st.error(
-        "❌ **Quota do Gemini esgotada.** Soluções:\n"
-        "- Aguarde o reset (~04h Brasília)\n"
-        "- Configure `ANTHROPIC_API_KEY` nos Secrets como alternativa\n"
-        "- Ative faturamento em [aistudio.google.com](https://aistudio.google.com/app/billing)"
-    )
-    return None
-
-
-def analisar_pdf_imagem_com_ia(pdf_bytes: bytes) -> dict | None:
-    """Extrai dados de PDF-imagem com IA. Retorna dict com cliente, vencimento, linhas."""
-    imgs = _converter_paginas(pdf_bytes)
-    if not imgs:
-        st.error("❌ Não foi possível converter as páginas do PDF em imagens.")
-        return None
-    resultado = _analisar_com_gemini(imgs)
-    if resultado:
-        return resultado
-    resultado = _analisar_com_anthropic(imgs)
-    if resultado:
-        return resultado
-    st.error("❌ Não foi possível analisar o PDF com IA. Verifique **GEMINI_API_KEY** nos Secrets.")
-    return None
-
-
-def to_float(valor) -> float:
-    try:
-        return float(str(valor).replace(".", "").replace(",", "."))
-    except (ValueError, TypeError):
-        return 0.0
-
-def extrair_gb_pacote(pacote: str) -> int:
-    m = re.search(r"(\d+)\s*GB", str(pacote))
-    return int(m.group(1)) if m else 0
-
-# ===== ANÁLISE VIA IA — Gemini Vision (gratuito) ou Anthropic (pago) ==========
-
-_PROMPT_FATURA = """Você é um extrator especializado em faturas da Claro Empresas (Brasil).
-
-PARTE 1 — METADADOS DA CAPA
-Extraia da primeira página:
-- "cliente": razão social do cliente (ex: "JO PNEUS LTDA"). NÃO use número de conta.
-- "vencimento": data de vencimento formato DD/MM/AAAA (ex: "28/03/2026")
-
-PARTE 2 — DETALHAMENTO POR LINHA
-Extraia dados SOMENTE das seções com cabeçalho vermelho:
-"DETALHAMENTO DE LIGAÇÕES E SERVIÇOS DO CELULAR (XX) XXXXX XXXX"
-Cada seção pertence a UMA linha. Não misture dados entre seções.
-Ignore: resumo geral, plano contratado, cobranças por celular, boleto, nota fiscal.
-
-Para CADA seção de detalhamento:
-
-CAMPO "linha": número do cabeçalho, 11 dígitos sem espaços/parênteses.
-  Ex: "(11) 98936 0484" → "11989360484"
-
-CAMPO "pacote": em "Mensalidades e Pacotes Promocionais", procure a linha indentada
-  com GB (ex: "Claro Pós 10GB", "Claro Pós 20GB"). NÃO use "Oferta Conjunta Claro MIX".
-  Validação: mensalidade R$44,99 → "Claro Pós 10GB" | R$54,99 → "Claro Pós 20GB".
-  CADA seção tem seu próprio pacote. Se não encontrar, use "-".
-
-CAMPO "mensalidade_total": valor "TOTAL" em "Mensalidades e Pacotes Promocionais".
-  Formato: "44,99" (vírgula decimal, sem R$).
-
-CAMPO "internet_mb": em "Serviços (Torpedos, Hits, Jogos, etc.) → Internet (MB)",
-  some a coluna "Mbytes Utilizados" de "Internet" + "Internet – meses anteriores".
-  Use o "Subtotal" se disponível — é a soma já calculada.
-  Retorne como STRING exatamente como aparece na fatura (ex: "7.526.866", "946.122").
-  NÃO converta para inteiro. NÃO remova separadores.
-
-CAMPO "minutos": duração total de ligações desta seção.
-  Leia a coluna "Duração" na linha "Total" do RODAPÉ DESTA SEÇÃO.
-  Formato: "26min12s", "46min36s", ou "0".
-  ⚠️ Cada seção tem seu próprio total de minutos — não repita o mesmo valor.
-
-CAMPO "passaporte": nome do passaporte Claro se houver, senão "-"
-CAMPO "valor_passaporte": valor R$ (ex: "14,99"), senão "0"
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-SAÍDA: SOMENTE JSON válido, sem markdown, sem texto antes ou depois.
-
-{
-  "cliente": "JO PNEUS LTDA",
-  "vencimento": "28/03/2026",
-  "linhas": [
-    {
-      "linha": "11989360484",
-      "pacote": "Claro Pós 10GB",
-      "mensalidade_total": "44,99",
-      "internet_mb": "7.526.866",
-      "minutos": "26min12s",
-      "passaporte": "-",
-      "valor_passaporte": "0"
-    }
-  ]
-}
-"""
-
-def _converter_paginas(pdf_bytes: bytes) -> list:
-    """Converte PDF em lista de imagens PIL."""
-    try:
-        return _pdf2image_convert(pdf_bytes, dpi=150)
-    except Exception:
-        return []
-
 def _parsear_json_ia(texto: str) -> dict | None:
     """
     Extrai JSON da resposta da IA.
@@ -895,9 +797,159 @@ def _parsear_json_ia(texto: str) -> dict | None:
         pass
     return None
 
-def processar_pdf(file):
+
+def _converter_paginas(pdf_bytes: bytes) -> list:
+    """Converte PDF em lista de imagens PIL."""
+    try:
+        return _pdf2image_convert(pdf_bytes, dpi=150)
+    except Exception:
+        return []
+
+
+def _analisar_com_gemini(imgs: list) -> dict | None:
+    """
+    Usa Gemini para extrair dados das imagens.
+    Retorna dict: {"cliente": ..., "vencimento": ..., "linhas": [...]}
+    Modelos (free tier): gemini-2.5-flash-lite → gemini-2.5-flash
+    Estratégia dupla:
+      1. Request principal: extrai todos os campos
+      2. Request de verificação: confirma apenas internet_mb via Subtotal
+         → usa sempre o maior valor (Subtotal >= linha Internet isolada)
+    """
+    if not _GEMINI_DISPONIVEL:
+        return None
+
+    api_key = None
+    try:
+        api_key = st.secrets["GEMINI_API_KEY"]
+    except Exception:
+        try:
+            api_key = st.secrets["GOOGLE_GEMINI_KEY"]
+        except Exception:
+            pass
+    if not api_key:
+        return None
+
+    genai.configure(api_key=api_key)
+    import time, json as _json
+
+    MODELOS = ["gemini-2.5-flash-lite", "gemini-2.5-flash"]
+
+    def _deduplicar(lista):
+        vistos, unicos = set(), []
+        for item in lista:
+            k = item.get("linha", "")
+            if k and k not in vistos:
+                vistos.add(k)
+                unicos.append(item)
+        return unicos
+
+    def _request_com_retry(model, paginas, prompt=None):
+        p = prompt or _PROMPT_FATURA
+        for tentativa in range(3):
+            try:
+                resp = model.generate_content([p] + paginas)
+                return resp.text
+            except Exception as e:
+                err = str(e)
+                is_quota = any(x in err for x in ["429", "RESOURCE_EXHAUSTED", "quota"])
+                if is_quota and tentativa < 2:
+                    time.sleep(15 * (2 ** tentativa))
+                elif is_quota:
+                    return "QUOTA"
+                else:
+                    raise
+        return None
+
+    def _verificar_internet(model, imgs, linhas_resultado):
+        """
+        Segundo request focado só no Subtotal de Internet.
+        Corrige silenciosamente se o Gemini pegou só 'Internet' sem 'meses anteriores'.
+        """
+        try:
+            texto = _request_com_retry(model, imgs, _PROMPT_VERIFICAR_INTERNET)
+            if not texto or texto == "QUOTA":
+                return
+            texto_clean = re.sub(r"```json|```", "", texto).strip()
+            lista = _json.loads(texto_clean)
+            if not isinstance(lista, list):
+                return
+            mapa = {item["linha"]: item["internet_mb"]
+                    for item in lista if "linha" in item and "internet_mb" in item}
+            for item in linhas_resultado:
+                num = item.get("linha", "")
+                if num not in mapa:
+                    continue
+                orig_norm  = _normalizar_internet_mb_ia(item.get("internet_mb", "0"))
+                verif_norm = _normalizar_internet_mb_ia(mapa[num])
+                orig_f  = float(orig_norm.replace(".", "").replace(",", "."))
+                verif_f = float(verif_norm.replace(".", "").replace(",", "."))
+                if verif_f > orig_f:
+                    item["internet_mb"] = mapa[num]
+        except Exception:
+            pass  # falha silenciosa — mantém resultado original
+
+    for modelo_nome in MODELOS:
+        try:
+            model = genai.GenerativeModel(modelo_nome)
+
+            # Request principal
+            texto = _request_com_retry(model, imgs)
+            if texto == "QUOTA":
+                st.warning(f"⚠️ Modelo **{modelo_nome}** com quota atingida, tentando alternativa...")
+                continue
+
+            resultado = _parsear_json_ia(texto) if texto else None
+
+            if resultado and resultado.get("linhas"):
+                resultado["linhas"] = _deduplicar(resultado["linhas"])
+                # Verificação de internet_mb (segundo request)
+                _verificar_internet(model, imgs, resultado["linhas"])
+                return resultado
+
+            # Fallback: divide em 2 metades se retornou vazio
+            metade = len(imgs) // 2
+            if metade > 0:
+                t1 = _request_com_retry(model, imgs[:metade])
+                t2 = _request_com_retry(model, imgs[metade:])
+                if t1 == "QUOTA" or t2 == "QUOTA":
+                    st.warning(f"⚠️ Modelo **{modelo_nome}** quota atingida, tentando alternativa...")
+                    continue
+                r1 = _parsear_json_ia(t1) if t1 else None
+                r2 = _parsear_json_ia(t2) if t2 else None
+                meta = r1 if isinstance(r1, dict) else (r2 if isinstance(r2, dict) else {})
+                l1 = (r1 or {}).get("linhas", [])
+                l2 = (r2 or {}).get("linhas", [])
+                combinado = l1 + l2
+                if combinado:
+                    linhas_finais = _deduplicar(combinado)
+                    _verificar_internet(model, imgs, linhas_finais)
+                    return {
+                        "cliente": meta.get("cliente", ""),
+                        "vencimento": meta.get("vencimento", ""),
+                        "linhas": linhas_finais
+                    }
+
+        except Exception as e:
+            err = str(e)
+            if any(x in err for x in ["429", "RESOURCE_EXHAUSTED", "quota", "not found", "404"]):
+                st.warning(f"⚠️ Modelo **{modelo_nome}** indisponível, tentando alternativa...")
+                continue
+            st.warning(f"⚠️ Gemini ({modelo_nome}): {e}")
+            return None
+
+    st.error(
+        "❌ **Quota do Gemini esgotada.** Soluções:\n"
+        "- Aguarde o reset (~04h Brasília)\n"
+        "- Configure `ANTHROPIC_API_KEY` nos Secrets como alternativa\n"
+        "- Ative faturamento em [aistudio.google.com](https://aistudio.google.com/app/billing)"
+    )
+    return None
+
+
+def _analisar_com_anthropic(imgs: list) -> dict | None:
     """Usa Claude Sonnet (pago) como fallback se Gemini não estiver configurado."""
-    import requests, base64
+    import requests as _req, base64
     try:
         api_key = None
         try:
@@ -919,7 +971,7 @@ def processar_pdf(file):
                 "source": {"type": "base64", "media_type": "image/jpeg", "data": img_to_b64(img)}
             })
 
-        resp = requests.post(
+        resp = _req.post(
             "https://api.anthropic.com/v1/messages",
             headers={
                 "Content-Type": "application/json",
@@ -937,18 +989,34 @@ def processar_pdf(file):
     except Exception:
         return None
 
+
+def analisar_pdf_imagem_com_ia(pdf_bytes: bytes) -> dict | None:
+    """Extrai dados de PDF-imagem com IA. Retorna dict com cliente, vencimento, linhas."""
+    imgs = _converter_paginas(pdf_bytes)
+    if not imgs:
+        st.error("❌ Não foi possível converter as páginas do PDF em imagens.")
+        return None
+    resultado = _analisar_com_gemini(imgs)
+    if resultado:
+        return resultado
+    resultado = _analisar_com_anthropic(imgs)
+    if resultado:
+        return resultado
+    st.error("❌ Não foi possível analisar o PDF com IA. Verifique **GEMINI_API_KEY** nos Secrets.")
+    return None
+
+
 def processar_pdf(file):
     """
     Processa PDF da Claro com 2 estratégias:
-    1. PDF digital  → pdfplumber + regex (texto nativo, rápido e preciso)
-    2. PDF imagem   → pdf2image + Claude Vision API (lê páginas como imagens)
-                      Sem OCR intermediário, sem regex para PDFs escaneados.
+    1. PDF digital  → pdfplumber + regex
+    2. PDF imagem   → IA (Gemini/Anthropic) com dupla verificação
     """
     placeholder = st.empty()
     file.seek(0)
     pdf_bytes = file.read()
 
-    # Detectar tipo: checar se primeiras páginas têm texto extraível com conteúdo real
+    # Detectar tipo: pelo menos 100 chars nas primeiras 3 páginas = digital
     with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
         total_paginas = len(pdf.pages)
         chars_extraidos = sum(
@@ -972,13 +1040,13 @@ def processar_pdf(file):
         progresso.empty()
         placeholder.empty()
 
-        cliente   = extrair_cliente(texto)
+        cliente    = extrair_cliente(texto)
         vencimento = extrair_vencimento(texto)
-        linhas    = extrair_linhas(texto)
-        blocos    = extrair_blocos_por_linha(texto)
+        linhas     = extrair_linhas(texto)
+        blocos     = extrair_blocos_por_linha(texto)
         mensalidades = extrair_mensalidades(blocos)
         detalhamento = extrair_detalhamento(blocos)
-        pacotes   = extrair_pacote_e_passaporte(blocos)
+        pacotes    = extrair_pacote_e_passaporte(blocos)
 
         dados = []
         for linha in linhas:
@@ -997,7 +1065,7 @@ def processar_pdf(file):
             })
 
     else:
-        # ── PDF imagem: IA lê as páginas diretamente ──
+        # ── PDF imagem: IA com dupla verificação ──
         if not _PDF2IMAGE_DISPONIVEL:
             raise ValueError("pdf2image não instalado. Adicione ao requirements.txt e poppler-utils ao packages.txt.")
 
@@ -1013,11 +1081,11 @@ def processar_pdf(file):
         if not resultado_ia:
             raise ValueError("Não foi possível extrair dados com IA. Verifique a chave GEMINI_API_KEY nos Secrets.")
 
-        dados_ia  = resultado_ia.get("linhas", [])
-        cliente   = resultado_ia.get("cliente", "").strip().upper() or "CLIENTE"
+        dados_ia   = resultado_ia.get("linhas", [])
+        cliente    = resultado_ia.get("cliente", "").strip().upper() or "CLIENTE"
         vencimento = resultado_ia.get("vencimento", "").strip()
 
-        # Fallback Vision para cliente/vencimento se IA não retornou
+        # Fallback Google Vision para cliente/vencimento se IA não retornou
         if cliente == "CLIENTE" or not vencimento:
             try:
                 from google.cloud import vision as _v
@@ -1086,20 +1154,16 @@ def processar_pdf(file):
     def estrategia(row):
         if row["Em Uso"] == "Não":
             return "⚪ Manter"
-
         pacote_gb = extrair_gb_pacote(row["Pacote de dados"])
         uso_gb = row["Internet (MB)"] / 1024 if row["Internet (MB)"] else 0
-
         if pacote_gb > 0 and uso_gb >= pacote_gb * 0.9:
             return "🔵 Upsell → Aumento recomendado"
-
         if "Baixo" in row["Perfil"]:
             return "🟡 Sustentar plano"
         if "Médio" in row["Perfil"]:
             return "🟢 Bem dimensionado"
         if "Alto" in row["Perfil"]:
             return "🟢 Bem dimensionado"
-
         return ""
 
     df["Estratégia Comercial"] = df.apply(estrategia, axis=1)
@@ -1111,7 +1175,6 @@ def gerar_excel(df: pd.DataFrame) -> io.BytesIO:
     ws = wb.active
     ws.title = "Detalhamento"
 
-    # FIX #12: reset_index com ignore_index
     df_reset = df.reset_index(drop=True)
 
     for r in dataframe_to_rows(df_reset, index=False, header=True):
@@ -1129,7 +1192,6 @@ def gerar_excel(df: pd.DataFrame) -> io.BytesIO:
     azul        = PatternFill(start_color="BDD7EE", fill_type="solid")
     cinza       = PatternFill(start_color="D9D9D9", fill_type="solid")
 
-    # FIX #1: índices por nome de coluna, não posição hardcoded
     headers = [cell.value for cell in ws[1]]
     col_idx = {v: i for i, v in enumerate(headers)}
 
@@ -1144,8 +1206,6 @@ def gerar_excel(df: pd.DataFrame) -> io.BytesIO:
             coluna = headers[j]
             if coluna in ("Perfil", "Estratégia Comercial"):
                 cell.alignment = Alignment(horizontal="left", vertical="center")
-            elif coluna == "Minutos":
-                cell.alignment = Alignment(horizontal="center", vertical="center")
             else:
                 cell.alignment = Alignment(horizontal="center", vertical="center")
             cell.border = borda
@@ -1154,10 +1214,9 @@ def gerar_excel(df: pd.DataFrame) -> io.BytesIO:
             for cell in row:
                 cell.fill = zebra
 
-        # FIX #1: usa índice por nome
         perfil     = str(row[col_idx["Perfil"]].value) if "Perfil" in col_idx else ""
         uso        = str(row[col_idx["Em Uso"]].value) if "Em Uso" in col_idx else ""
-        estrategia = str(row[col_idx["Estratégia Comercial"]].value) if "Estratégia Comercial" in col_idx else ""
+        estrategia_val = str(row[col_idx["Estratégia Comercial"]].value) if "Estratégia Comercial" in col_idx else ""
 
         if "Alto" in perfil:
             row[col_idx["Perfil"]].fill = vermelho
@@ -1171,13 +1230,13 @@ def gerar_excel(df: pd.DataFrame) -> io.BytesIO:
                 row[col_idx["Em Uso"]].fill = verde
 
         if "Estratégia Comercial" in col_idx:
-            if "Manter" in estrategia:
+            if "Manter" in estrategia_val:
                 row[col_idx["Estratégia Comercial"]].fill = cinza
-            elif "Sustentar" in estrategia:
+            elif "Sustentar" in estrategia_val:
                 row[col_idx["Estratégia Comercial"]].fill = amarelo
-            elif "Bem dimensionado" in estrategia:
+            elif "Bem dimensionado" in estrategia_val:
                 row[col_idx["Estratégia Comercial"]].fill = verde
-            elif "Upsell" in estrategia:
+            elif "Upsell" in estrategia_val:
                 row[col_idx["Estratégia Comercial"]].fill = azul
 
     for col in ws.columns:
@@ -1202,11 +1261,9 @@ if uploaded_files:
     total_files = len(uploaded_files)
 
     for i, file in enumerate(uploaded_files):
-        # FIX #11: tratamento de erro no processamento
         try:
             with st.spinner(f"Processando {file.name}..."):
                 df, cliente, vencimento = processar_pdf(file)
-                # FIX #12: ignore_index=True no concat
                 df_total = pd.concat([df_total, df], ignore_index=True)
                 cliente_nome = cliente
                 vencimento_fatura = vencimento
@@ -1236,6 +1293,7 @@ if uploaded_files:
         st.markdown('<div class="tt-divider"></div>', unsafe_allow_html=True)
         st.markdown('<p class="tt-section-title">📋 Detalhamento por Linha</p>', unsafe_allow_html=True)
 
+        # Exibição com MB formatado '14.423,700'
         df_display = df_total.copy()
         if "Internet (MB) fmt" in df_display.columns:
             df_display["Internet (MB)"] = df_display["Internet (MB) fmt"]
