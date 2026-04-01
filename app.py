@@ -758,13 +758,29 @@ _PACOTES_CLARO = [
 def _validar_pacote_ia(pacote: str, mensalidade_total: str) -> str:
     """
     Corrige o pacote usando a mensalidade como âncora.
-    Age em dois casos:
-      1. Pacote tem GB errado: "Claro Pós 20GB" com mensalidade de 10GB → corrige GB
-      2. Pacote não tem GB:    "Claro Pós MIX" ou "Oferta Conjunta" → substitui pelo correto
-    Só age quando a mensalidade bate com uma faixa conhecida.
+
+    REGRA PRINCIPAL: se o Gemini retornou um nome COM GB (ex: "Claro Pós 40GB"),
+    confia nele e NÃO sobrescreve — a fatura tem esse valor explícito e a
+    inferência por preço é imprecisa (ex: 40GB e 20GB podem ter preços próximos).
+
+    CORREÇÃO: só age quando o nome NÃO tem GB, indicando bundle genérico
+    ("Claro Pós MIX", "Oferta Conjunta Claro MIX") em vez do plano individual.
     """
     if not pacote or pacote == '-':
         return pacote
+
+    # Se já tem GB explícito → confiar no Gemini, não sobrescrever
+    if re.search(r'\d+\s*GB', pacote, re.IGNORECASE):
+        return pacote
+
+    # Sem GB → bundle genérico → só corrige se for nome Claro Pós/bundle
+    nomes_genericos = ["mix", "oferta conjunta", "bundle"]
+    eh_generico = (
+        any(n in pacote.lower() for n in nomes_genericos)
+        or pacote.lower().startswith("claro pós")
+    )
+    if not eh_generico:
+        return pacote  # plano específico sem GB (ex: "Claro Life Ilimitado") → mantém
 
     try:
         mensalidade = float(mensalidade_total.replace('.', '').replace(',', '.'))
@@ -773,32 +789,12 @@ def _validar_pacote_ia(pacote: str, mensalidade_total: str) -> str:
     if mensalidade <= 0:
         return pacote
 
-    # Determina o GB esperado pela mensalidade
-    gb_esperado = None
-    for mn, mx, gb in _PACOTES_CLARO:
+    for mn, mx, gb_esperado in _PACOTES_CLARO:
         if mn <= mensalidade <= mx:
-            gb_esperado = gb
-            break
+            return f"Claro Pós {gb_esperado}GB"
 
-    if gb_esperado is None:
-        return pacote  # mensalidade fora das faixas conhecidas → não mexe
+    return pacote
 
-    # Caso 1: pacote tem GB — verifica se está correto
-    m_gb = re.search(r'(\d+)\s*GB', pacote, re.IGNORECASE)
-    if m_gb:
-        gb_ia = int(m_gb.group(1))
-        if gb_ia != gb_esperado:
-            prefixo = re.sub(r'\d+\s*GB.*', '', pacote).strip() or "Claro Pós"
-            return f"{prefixo} {gb_esperado}GB"
-        return pacote  # GB correto → mantém nome original
-
-    # Caso 2: pacote sem GB ("Claro Pós MIX", "Oferta Conjunta Claro MIX", etc.)
-    # Só substitui se o nome sugere ser um plano Claro Pós/bundle genérico
-    # Planos específicos sem GB (Life Ilimitado, Controle, etc.) são mantidos
-    nomes_genericos = ["mix", "oferta conjunta", "bundle", "claro pós mix"]
-    if any(n in pacote.lower() for n in nomes_genericos) or pacote.lower().startswith("claro pós") and "gb" not in pacote.lower():
-        return f"Claro Pós {gb_esperado}GB"
-    return pacote  # plano específico sem GB → mantém
 
 
 def _parsear_json_ia(texto: str) -> dict | None:
