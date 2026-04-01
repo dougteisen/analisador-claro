@@ -888,6 +888,8 @@ def _analisar_com_gemini(imgs: list) -> dict | None:
         """
         Segundo request focado só no Subtotal de Internet.
         Corrige silenciosamente se o Gemini pegou só 'Internet' sem 'meses anteriores'.
+        Só substitui se o valor verificado for maior E plausível (≤ 3x o original),
+        evitando contaminação entre linhas quando o Gemini associa Subtotal errado.
         """
         try:
             texto = _request_com_retry(model, imgs, _PROMPT_VERIFICAR_INTERNET)
@@ -907,7 +909,10 @@ def _analisar_com_gemini(imgs: list) -> dict | None:
                 verif_norm = _normalizar_internet_mb_ia(mapa[num])
                 orig_f  = float(orig_norm.replace(".", "").replace(",", "."))
                 verif_f = float(verif_norm.replace(".", "").replace(",", "."))
-                if verif_f > orig_f:
+                # Só substitui se: (1) verificado é maior E (2) não mais que 1.5x o original
+                # 1.5x cobre "meses anteriores" legítimos (tipicamente 1.0x–1.3x)
+                # mas bloqueia contaminação entre linhas (tipicamente 1.9x ou mais)
+                if verif_f > orig_f and (orig_f == 0 or verif_f <= orig_f * 1.5):
                     item["internet_mb"] = mapa[num]
         except Exception:
             pass  # falha silenciosa — mantém resultado original
