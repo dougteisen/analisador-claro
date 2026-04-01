@@ -1234,10 +1234,28 @@ def _analisar_compartilhado_com_anthropic(imgs: list) -> dict | None:
             if resp_capa.status_code == 200:
                 txt = "".join(b["text"] for b in resp_capa.json().get("content", [])
                               if b.get("type") == "text")
-                txt = re.sub(r"```json|```", "", txt).strip()
-                dados_capa.update(_json.loads(txt))
-        except Exception:
-            pass
+                st.info(f"🔍 [DEBUG capa] {txt[:300]}")
+                txt_clean = re.sub(r"```json|```", "", txt).strip()
+                # Tenta parsing JSON; se falhar, extrai via regex
+                try:
+                    dados_capa.update(_json.loads(txt_clean))
+                except Exception:
+                    # Fallback regex direto no texto bruto
+                    m_nome = re.search(r"Claro Total Compartilhado\s*\d+\s*GB", txt, re.IGNORECASE)
+                    m_val  = re.search(r'"valor_plano_compartilhado"\s*:\s*"([\d\.,]+)"', txt)
+                    m_val2 = re.search(r'Oferta Conjunta Claro MIX[^\d]*([\d\.]+,\d{2})', txt)
+                    if m_nome:
+                        dados_capa["nome_plano_compartilhado"] = m_nome.group(0).strip()
+                    if m_val:
+                        dados_capa["valor_plano_compartilhado"] = m_val.group(1)
+                    elif m_val2:
+                        dados_capa["valor_plano_compartilhado"] = m_val2.group(1)
+            else:
+                st.warning(f"⚠️ [DEBUG capa] status {resp_capa.status_code}")
+        except Exception as e:
+            st.warning(f"⚠️ [DEBUG capa] exception: {e}")
+
+        st.info(f"🔍 [DEBUG dados_capa] nome='{dados_capa.get('nome_plano_compartilhado')}' valor='{dados_capa.get('valor_plano_compartilhado')}'")
 
         # ── Request 2: todas as páginas para detalhamento por linha ──────────
         content = [{"type": "text", "text": _PROMPT_FATURA_COMPARTILHADA}]
@@ -1255,11 +1273,14 @@ def _analisar_compartilhado_com_anthropic(imgs: list) -> dict | None:
             timeout=180
         )
         if resp.status_code != 200:
+            st.warning(f"⚠️ [DEBUG detalhe] status {resp.status_code}: {resp.text[:200]}")
             return None
         texto = "".join(b["text"] for b in resp.json().get("content", [])
                         if b.get("type") == "text")
+        st.info(f"🔍 [DEBUG detalhe JSON] {texto[:500]}")
         resultado = _parsear_json_compartilhado(texto)
         if not resultado:
+            st.warning("⚠️ [DEBUG] _parsear_json_compartilhado retornou None")
             return None
 
         # ── Mescla: dados da capa sempre prevalecem para nome/valor/cliente/vencimento
@@ -1272,8 +1293,10 @@ def _analisar_compartilhado_com_anthropic(imgs: list) -> dict | None:
         if dados_capa.get("vencimento"):
             resultado["vencimento"] = dados_capa["vencimento"]
 
+        st.info(f"🔍 [DEBUG final] nome='{resultado.get('nome_plano_compartilhado')}' valor='{resultado.get('valor_plano_compartilhado')}' linhas={len(resultado.get('linhas',[]))}")
         return resultado
-    except Exception:
+    except Exception as e:
+        st.error(f"❌ [DEBUG] exception geral: {e}")
         return None
 
 
