@@ -723,53 +723,6 @@ def _extrair_linhas_compartilhado_capa(texto: str) -> list:
         numeros.add(num)
     return sorted(numeros)
 
-def _detectar_plano_compartilhado_capa(pdf_bytes: bytes) -> bool:
-    """Detecta plano compartilhado: pdfplumber para PDF digital, Anthropic para PDF imagem."""
-    try:
-        with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
-            for page in pdf.pages[:3]:
-                t = page.extract_text() or ""
-                if _detectar_plano_compartilhado(t):
-                    return True
-                if len(t.strip()) > 50:
-                    return False
-    except Exception:
-        pass
-    # PDF imagem: Claude lê só a capa (1 página, barato)
-    import requests as _req, base64, json as _json
-    try:
-        api_key = ""
-        try:
-            api_key = st.secrets["ANTHROPIC_API_KEY"]
-        except Exception:
-            pass
-        if not api_key:
-            return False
-        imgs_det = _converter_paginas(pdf_bytes)
-        if not imgs_det:
-            return False
-        buf = io.BytesIO()
-        imgs_det[0].save(buf, format="JPEG", quality=80)
-        b64 = base64.b64encode(buf.getvalue()).decode()
-        prompt_det = 'Primeira pagina de fatura Claro Empresas. A secao "1. PLANO CONTRATADO" tem subsecao "Compartilhado"? Responda SOMENTE JSON: {"compartilhado": true} ou {"compartilhado": false}'
-        r = _req.post("https://api.anthropic.com/v1/messages",
-            headers={"Content-Type": "application/json",
-                     "anthropic-version": "2023-06-01", "x-api-key": api_key},
-            json={"model": "claude-sonnet-4-20250514", "max_tokens": 20,
-                  "messages": [{"role": "user", "content": [
-                      {"type": "text", "text": prompt_det},
-                      {"type": "image", "source": {"type": "base64",
-                       "media_type": "image/jpeg", "data": b64}}]}]},
-            timeout=30)
-        if r.status_code == 200:
-            txt = "".join(x["text"] for x in r.json().get("content", []) if x.get("type") == "text")
-            txt = re.sub(r"```json|```", "", txt).strip()
-            return bool(_json.loads(txt).get("compartilhado", False))
-    except Exception:
-        pass
-    return False
-
-
 def processar_pdf_compartilhado(texto: str, cliente: str, vencimento: str) -> tuple:
     """
     Processa fatura de plano compartilhado a partir do texto extraído.
@@ -1017,275 +970,8 @@ Retorne SOMENTE JSON:
   {"linha": "11978110855", "internet_mb": "0"}
 ]
 
-
 Retorne o Subtotal exatamente como aparece na fatura. Se zero/ausente, retorne "0".
 """
-
-
-# ── Prompts e funções para plano compartilhado em PDF de imagem ───────────────
-
-_PROMPT_CAPA_COMPARTILHADA = """Analise SOMENTE esta imagem (primeira página da fatura Claro Empresas).
-
-Na seção "1. PLANO CONTRATADO", subseção "Compartilhado":
-- Há uma linha "Oferta Conjunta Claro MIX" com um valor numérico à direita (ex: 310,28)
-- Logo abaixo há uma linha recuada com "Claro Total Compartilhado XGB [192]"
-
-Extraia:
-- nome_plano_compartilhado: ex "Claro Total Compartilhado 150GB" (sem o [192])
-- valor_plano_compartilhado: ex "310,28" (vírgula decimal, sem R$)
-- cliente: razão social da empresa
-- vencimento: data DD/MM/AAAA
-
-Retorne SOMENTE JSON:
-{"cliente": "CONFRUTY ALIMENTOS EIRELI", "vencimento": "24/03/2026", "nome_plano_compartilhado": "Claro Total Compartilhado 150GB", "valor_plano_compartilhado": "310,28"}
-"""
-
-_PROMPT_FATURA_COMPARTILHADA = """Você é um extrator de faturas Claro Empresas — PLANO COMPARTILHADO.
-
-Esta fatura tem várias páginas com seções:
-  "DETALHAMENTO DE LIGAÇÕES E SERVIÇOS DO CELULAR (XX) XXXXX XXXX"
-
-REGRA ABSOLUTA: retorne UMA entrada para CADA seção, SEM EXCEÇÃO.
-Conte as seções e confirme que o número de entradas bate.
-Processe cada seção ISOLADAMENTE.
-
-"linha": 11 dígitos sem espaços/parênteses. "(11) 99946 5790" -> "11999465790"
-
-"mensalidade_individual": valor do TOTAL em "Mensalidades e Pacotes Promocionais" desta seção.
-  Oferta Claro Total Mix Plugin Smartphone    21,37
-  TOTAL                                    R$ 21,37
-Use "21,37". Pode variar por linha. NUNCA copie de outra seção.
-
-"internet_mb": em "Internet (MB)" desta seção:
-  Internet              12.916,518
-  Internet-meses ant.      596,958
-  Subtotal              13.513,476  <- USE ESTE se existir
-Prioridade: Subtotal > soma > só Internet > "0"
-ISOLAMENTO CRITICO: Subtotal de uma seção NAO vale para outra.
-Formato ponto=milhar virgula=decimal. Retorne EXATO: "13.513,476"
-NUNCA use "Detalhes da Internet móvel" (tabela de datas diárias).
-
-"minutos": TOTAL do rodapé desta seção, coluna Duração. Ex: "15min6s", "0".
-
-"passaporte"/"valor_passaporte": se houver "Claro Passaporte" -> nome e valor. Senão: "-" e "0".
-
-SAÍDA — SOMENTE JSON sem markdown:
-{
-  "tipo": "compartilhado",
-  "linhas": [
-    {"linha": "11919030001", "mensalidade_individual": "19,99", "internet_mb": "33.511", "minutos": "0", "passaporte": "-", "valor_passaporte": "0"},
-    {"linha": "11989669622", "mensalidade_individual": "21,37", "internet_mb": "13.513,476", "minutos": "11min6s", "passaporte": "-", "valor_passaporte": "0"}
-  ]
-}
-"""
-
-
-def _parsear_json_compartilhado(texto: str) -> dict | None:
-    import json as _json
-    try:
-        texto = re.sub(r"```json|```", "", texto).strip()
-        r = _json.loads(texto)
-        if isinstance(r, dict) and r.get("linhas"):
-            r["tipo"] = "compartilhado"
-            return r
-    except Exception:
-        pass
-    return None
-
-
-def _analisar_compartilhado_com_anthropic(imgs: list) -> dict | None:
-    import requests as _req, base64, json as _json
-    try:
-        api_key = ""
-        try:
-            api_key = st.secrets["ANTHROPIC_API_KEY"]
-        except Exception:
-            pass
-        if not api_key:
-            return None
-
-        def b64(img):
-            buf = io.BytesIO()
-            img.save(buf, format="JPEG", quality=85)
-            return base64.b64encode(buf.getvalue()).decode()
-
-        headers = {"Content-Type": "application/json",
-                   "anthropic-version": "2023-06-01", "x-api-key": api_key}
-
-        # Request 1: so capa (pagina 1) — nome e valor do plano
-        dados_capa = {"cliente": "CLIENTE", "vencimento": "",
-                      "nome_plano_compartilhado": "", "valor_plano_compartilhado": "0"}
-        try:
-            r1 = _req.post("https://api.anthropic.com/v1/messages", headers=headers,
-                json={"model": "claude-sonnet-4-20250514", "max_tokens": 300,
-                      "messages": [{"role": "user", "content": [
-                          {"type": "text", "text": _PROMPT_CAPA_COMPARTILHADA},
-                          {"type": "image", "source": {"type": "base64",
-                           "media_type": "image/jpeg", "data": b64(imgs[0])}}]}]},
-                timeout=60)
-            if r1.status_code == 200:
-                txt = "".join(x["text"] for x in r1.json().get("content", []) if x.get("type") == "text")
-                txt = re.sub(r"```json|```", "", txt).strip()
-                dados_capa.update(_json.loads(txt))
-        except Exception:
-            pass
-
-        # Request 2: todas as paginas — detalhamento por linha
-        content = [{"type": "text", "text": _PROMPT_FATURA_COMPARTILHADA}]
-        for img in imgs:
-            content.append({"type": "image", "source": {"type": "base64",
-                            "media_type": "image/jpeg", "data": b64(img)}})
-        r2 = _req.post("https://api.anthropic.com/v1/messages", headers=headers,
-            json={"model": "claude-sonnet-4-20250514", "max_tokens": 4000,
-                  "messages": [{"role": "user", "content": content}]},
-            timeout=180)
-        if r2.status_code != 200:
-            return None
-        texto = "".join(x["text"] for x in r2.json().get("content", []) if x.get("type") == "text")
-        resultado = _parsear_json_compartilhado(texto)
-        if not resultado:
-            return None
-
-        # Mescla: capa sempre prevalece para nome/valor/cliente/vencimento
-        for campo, val in dados_capa.items():
-            if val and val not in ("CLIENTE", "0", ""):
-                resultado[campo] = val
-
-        return resultado
-    except Exception:
-        return None
-
-
-def _analisar_compartilhado_com_gemini(imgs: list) -> dict | None:
-    if not _GEMINI_DISPONIVEL:
-        return None
-    api_key = None
-    try:
-        api_key = st.secrets["GEMINI_API_KEY"]
-    except Exception:
-        try:
-            api_key = st.secrets["GOOGLE_GEMINI_KEY"]
-        except Exception:
-            pass
-    if not api_key:
-        return None
-    genai.configure(api_key=api_key)
-    import time
-
-    def _dedup(lista):
-        vistos, unicos = set(), []
-        for item in lista:
-            k = item.get("linha", "")
-            if k and k not in vistos:
-                vistos.add(k); unicos.append(item)
-        return unicos
-
-    for modelo_nome in ["gemini-2.5-flash-lite", "gemini-2.5-flash"]:
-        try:
-            model = genai.GenerativeModel(modelo_nome)
-            for tentativa in range(3):
-                try:
-                    resp = model.generate_content([_PROMPT_FATURA_COMPARTILHADA] + imgs)
-                    resultado = _parsear_json_compartilhado(resp.text)
-                    if resultado and resultado.get("linhas"):
-                        resultado["linhas"] = _dedup(resultado["linhas"])
-                        return resultado
-                    break
-                except Exception as e:
-                    if any(x in str(e) for x in ["429", "RESOURCE_EXHAUSTED", "quota"]):
-                        if tentativa < 2:
-                            time.sleep(15 * (2 ** tentativa))
-                        else:
-                            break
-                    else:
-                        raise
-        except Exception:
-            continue
-    return None
-
-
-def analisar_pdf_compartilhado_com_ia(pdf_bytes: bytes) -> dict | None:
-    imgs = _converter_paginas(pdf_bytes)
-    if not imgs:
-        return None
-    _tem_anthropic = False
-    try:
-        _tem_anthropic = bool(st.secrets["ANTHROPIC_API_KEY"])
-    except Exception:
-        pass
-    if _tem_anthropic:
-        r = _analisar_compartilhado_com_anthropic(imgs)
-        if r:
-            return r
-    return _analisar_compartilhado_com_gemini(imgs)
-
-
-def processar_pdf_compartilhado_imagem(resultado_ia: dict, cliente: str, vencimento: str) -> tuple:
-    nome_plano  = resultado_ia.get("nome_plano_compartilhado", "Claro Total Compartilhado").strip()
-    valor_plano = to_float(resultado_ia.get("valor_plano_compartilhado", "0"))
-    dados_ia    = resultado_ia.get("linhas", [])
-
-    dados = []
-    for item in dados_ia:
-        mens_ind   = to_float(item.get("mensalidade_individual", "0"))
-        valor_pass = to_float(item.get("valor_passaporte", "0"))
-        total_ln   = mens_ind + valor_pass
-        internet   = _normalizar_internet_mb_ia(item.get("internet_mb", "0"))
-        dados.append({
-            "Linha":                  item.get("linha", ""),
-            "Internet (MB)":          internet,
-            "Internet (MB) fmt":      "",
-            "Pacote de dados":        nome_plano,
-            "Mensalidade":            f"R$ {mens_ind:.2f}".replace(".", ","),
-            "Passaporte":             item.get("passaporte", "-"),
-            "Mensalidade Passaporte": f"R$ {valor_pass:.2f}".replace(".", ",") if valor_pass else "-",
-            "Total por linha":        f"R$ {total_ln:.2f}".replace(".", ","),
-            "Minutos":                item.get("minutos", "0"),
-        })
-
-    df = pd.DataFrame(dados)
-    df["Internet (MB)"] = (df["Internet (MB)"].astype(str)
-        .str.replace(".", "", regex=False).str.replace(",", ".", regex=False))
-    df["Internet (MB)"] = pd.to_numeric(df["Internet (MB)"], errors="coerce").fillna(0)
-    df["Internet (MB) fmt"] = df["Internet (MB)"].apply(_fmt_mb_display)
-
-    franquia_mb = extrair_gb_pacote(nome_plano) * 1024
-    n = max(len(dados), 1)
-
-    def perfil(mb):
-        if mb == 0: return "⚪ Baixo"
-        media = franquia_mb / n if franquia_mb > 0 else 0
-        if media == 0:
-            return "⚪ Baixo" if mb/1024 < 1 else ("🟡 Médio" if mb/1024 < 5 else "🔴 Alto")
-        r = mb / media
-        return "⚪ Baixo" if r < 0.3 else ("🟡 Médio" if r < 0.8 else "🔴 Alto")
-
-    df["Perfil"] = df["Internet (MB)"].apply(perfil)
-
-    def em_uso(row):
-        sem_min = re.fullmatch(r"0[^\d]*|", str(row["Minutos"]).strip().lower()) is not None
-        return "Não" if row["Internet (MB)"] == 0 and sem_min else "Sim"
-
-    df["Em Uso"] = df.apply(em_uso, axis=1)
-
-    def estrategia(row):
-        if row["Em Uso"] == "Não": return "⚪ Manter"
-        if "Baixo" in row["Perfil"]: return "🟡 Sustentar plano"
-        return "🟢 Bem dimensionado"
-
-    df["Estratégia Comercial"] = df.apply(estrategia, axis=1)
-
-    linha_plano = {
-        "Linha": "PLANO COMPARTILHADO", "Internet (MB)": 0.0, "Internet (MB) fmt": "-",
-        "Pacote de dados": nome_plano,
-        "Mensalidade": f"R$ {valor_plano:.2f}".replace(".", ","),
-        "Passaporte": "-", "Mensalidade Passaporte": "-",
-        "Total por linha": f"R$ {valor_plano:.2f}".replace(".", ","),
-        "Minutos": "-", "Perfil": "-", "Em Uso": "-", "Estratégia Comercial": "-",
-    }
-    df = pd.concat([df, pd.DataFrame([linha_plano])], ignore_index=True)
-    return df, cliente, vencimento
-
 
 
 def _normalizar_internet_mb_ia(valor) -> str:
@@ -1671,20 +1357,14 @@ def processar_pdf(file):
             })
 
     else:
-        # ── PDF imagem: IA com detecção de tipo ──
+        # ── PDF imagem: IA com dupla verificação ──
         if not _PDF2IMAGE_DISPONIVEL:
             raise ValueError("pdf2image não instalado. Adicione ao requirements.txt e poppler-utils ao packages.txt.")
 
         placeholder.text("🖼️ PDF de imagem — analisando com IA (pode levar ~30s)...")
         progresso = st.progress(0.1)
 
-        # Detecta se é plano compartilhado antes de chamar a IA
-        _eh_compartilhado_img = _detectar_plano_compartilhado_capa(pdf_bytes)
-
-        if _eh_compartilhado_img:
-            resultado_ia = analisar_pdf_compartilhado_com_ia(pdf_bytes)
-        else:
-            resultado_ia = analisar_pdf_imagem_com_ia(pdf_bytes)
+        resultado_ia = analisar_pdf_imagem_com_ia(pdf_bytes)
 
         progresso.progress(1.0)
         progresso.empty()
@@ -1693,6 +1373,7 @@ def processar_pdf(file):
         if not resultado_ia:
             raise ValueError("Não foi possível extrair dados com IA. Verifique a chave GEMINI_API_KEY nos Secrets.")
 
+        dados_ia   = resultado_ia.get("linhas", [])
         cliente    = resultado_ia.get("cliente", "").strip().upper() or "CLIENTE"
         vencimento = resultado_ia.get("vencimento", "").strip()
 
@@ -1713,12 +1394,9 @@ def processar_pdf(file):
             except Exception:
                 pass
 
-        # Desvio para processador compartilhado imagem
-        if _eh_compartilhado_img and resultado_ia.get("tipo") == "compartilhado":
-            return processar_pdf_compartilhado_imagem(resultado_ia, cliente, vencimento)
+        # Se todos os pacotes vieram "-" ou bundle sem GB, não há o que corrigir
+        # sem risco de inventar dados. Mantém como está.
 
-        # Fluxo individual imagem (original intocado)
-        dados_ia = resultado_ia.get("linhas", [])
         dados = []
         for item in dados_ia:
             total       = to_float(item.get("mensalidade_total", "0"))
@@ -1997,3 +1675,5 @@ if uploaded_files:
                 file_name=nome_arquivo,
                 use_container_width=True,
             )
+
+
