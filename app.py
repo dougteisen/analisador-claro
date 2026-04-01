@@ -636,72 +636,65 @@ def extrair_gb_pacote(pacote: str) -> int:
 _PROMPT_FATURA = """Você é um extrator especializado em faturas da Claro Empresas (Brasil).
 
 PARTE 1 — METADADOS DA CAPA
-Extraia da primeira página:
-- "cliente": razão social do cliente (ex: "JO PNEUS LTDA", "PROXY PRODUTOS ORTOPEDICOS LTDA"). NÃO use número de conta.
-- "vencimento": data de vencimento formato DD/MM/AAAA (ex: "28/03/2026")
+Da primeira página extraia:
+- "cliente": razão social (ex: "PROXY PRODUTOS ORTOPEDICOS LTDA"). NÃO use número de conta.
+- "vencimento": data de vencimento DD/MM/AAAA (ex: "17/04/2026")
 
-PARTE 2 — DETALHAMENTO POR LINHA
-Extraia dados SOMENTE das seções com cabeçalho vermelho/colorido:
-"DETALHAMENTO DE LIGAÇÕES E SERVIÇOS DO CELULAR (XX) XXXXX XXXX"
-Cada seção pertence a UMA linha telefônica. Processe cada seção independentemente.
-Ignore: resumo geral, plano contratado, cobranças por celular, boleto, nota fiscal.
+PARTE 2 — UMA ENTRADA POR SEÇÃO DE DETALHAMENTO
+Cada seção começa com cabeçalho vermelho/colorido:
+  "DETALHAMENTO DE LIGAÇÕES E SERVIÇOS DO CELULAR (XX) XXXXX XXXX"
 
-━━━ CAMPO "linha" ━━━
-Número de telefone do cabeçalho desta seção. 11 dígitos, sem espaços/parênteses.
-Ex: "(11) 93235 6185" → "11932356185"
+Processe cada seção ISOLADAMENTE. Os dados de cada seção pertencem EXCLUSIVAMENTE
+ao número de telefone do cabeçalho daquela seção.
 
-━━━ CAMPO "pacote" ━━━
-Procure na subseção "Mensalidades e Pacotes Promocionais" desta seção.
-A estrutura típica é:
-  Oferta Conjunta Claro MIX          52,48
-    App incluso na oferta – (...)      –
-    Claro Pós 40GB                     –   ← pacote correto
-    Aplicativos Digitais               –
+━━━ "linha" ━━━
+Número do cabeçalho. 11 dígitos sem espaços/parênteses.
+"(11) 93235 6185" → "11932356185"
 
-O pacote é a linha indentada que menciona GB: "Claro Pós 10GB", "Claro Pós 40GB", etc.
-NÃO use "Oferta Conjunta Claro MIX" nem "App incluso" nem "Aplicativos Digitais".
+━━━ "pacote" ━━━
+DENTRO desta seção, em "Mensalidades e Pacotes Promocionais":
+  Oferta Conjunta Claro MIX       52,48
+    App incluso na oferta – ...     –
+    Claro Pós 40GB                  –   ← este é o pacote
+    Aplicativos Digitais            –
 
-SE não encontrar linha com GB nesta seção:
-  → Verifique na seção "1. PLANO CONTRATADO" da capa qual plano está associado a esta linha
-  → Use o plano listado lá (ex: "Claro Pós 40GB", "Claro Pós 10GB")
-  → Se ainda não encontrar, use "-"
+A linha do pacote tem GB no nome e valor "–" (não tem preço próprio).
+NÃO use "Oferta Conjunta Claro MIX". NÃO use "App incluso". NÃO use "Aplicativos Digitais".
+Se não encontrar nesta seção, use "-". NÃO busque em outras seções.
 
-━━━ CAMPO "mensalidade_total" ━━━
-Valor na linha "TOTAL" de "Mensalidades e Pacotes Promocionais" desta seção.
+━━━ "mensalidade_total" ━━━
+Linha "TOTAL" da subseção "Mensalidades e Pacotes Promocionais" desta seção.
 Formato: "52,48" (vírgula decimal, sem R$).
 
-━━━ CAMPO "internet_mb" ━━━ ⚠️ LEIA COM ATENÇÃO
-Na subseção "Serviços (Torpedos, Hits, Jogos, etc.) → Internet (MB)" desta seção:
+━━━ "internet_mb" ━━━
+DENTRO desta seção, em "Serviços (Torpedos, Hits, Jogos, etc.) → Internet (MB)":
 
-ESTRUTURA ESPERADA:
-  Serviço                     Mbytes Utilizados
-  Internet                        1.984.588
-  Internet – meses anteriores        52.724
-  Subtotal                        2.037.312   ← USE ESTE
+  Serviço                  Mbytes Utilizados   Tarifa   Valor
+  Internet                     1.455.161        0,00    0,00
+  Internet – meses ant.           60.552        0,00    0,00
+  Subtotal                     1.515.713                0,00  ← USE ESTE
 
-REGRAS:
-1. Use SEMPRE o valor "Subtotal" quando existir
-2. Se não houver Subtotal, some "Internet" + "Internet – meses anteriores"
-3. Se houver apenas "Internet" sem "meses anteriores", use o valor de "Internet"
-4. Se não houver seção Internet (MB) nesta seção, use "0"
+REGRAS em ordem de prioridade:
+1. Use "Subtotal" se existir
+2. Some "Internet" + "Internet – meses anteriores" se não houver Subtotal
+3. Use só "Internet" se não houver meses anteriores
+4. Retorne "0" se não houver seção Internet nesta seção
 
-Retorne como STRING com os separadores originais da fatura: "2.037.312", "12.722", "387.484"
-NÃO remova pontos. NÃO converta para inteiro. Se for zero, retorne "0".
+⚠️ O Subtotal é SEMPRE maior ou igual à linha "Internet".
+⚠️ Nunca use valores da tabela "Detalhes da Internet móvel" (datas diárias).
+Retorne como STRING com pontos: "1.515.713", "12.722", "387.484", "0"
 
-━━━ CAMPO "minutos" ━━━
-Duração total de ligações desta seção, na linha "TOTAL" do rodapé.
-Formato: "26min12s", "42s", ou "0" se não houver ligações.
-⚠️ Cada seção tem seu próprio TOTAL — leia apenas o desta seção.
+━━━ "minutos" ━━━
+Linha "TOTAL" do rodapé desta seção, coluna "Duração".
+Exemplos: "26min12s", "42s", "1min30s", "0".
+⚠️ Cada seção tem seu TOTAL próprio. NÃO copie de outra seção.
+Se não houver ligações, retorne "0".
 
-━━━ CAMPO "passaporte" ━━━
-Nome do passaporte Claro se houver linha "Claro Passaporte" em Mensalidades. Senão "-".
-
-━━━ CAMPO "valor_passaporte" ━━━
-Valor R$ do passaporte (ex: "14,99"). Senão "0".
+━━━ "passaporte" / "valor_passaporte" ━━━
+Se houver "Claro Passaporte" em Mensalidades → nome e valor. Senão "-" e "0".
 
 ━━━ SAÍDA ━━━
-SOMENTE JSON válido, sem markdown, sem texto antes ou depois.
-Uma entrada por seção de detalhamento encontrada, na ordem em que aparecem.
+SOMENTE JSON válido, sem markdown.
 
 {
   "cliente": "PROXY PRODUTOS ORTOPEDICOS LTDA",
@@ -715,26 +708,50 @@ Uma entrada por seção de detalhamento encontrada, na ordem em que aparecem.
       "minutos": "30s",
       "passaporte": "-",
       "valor_passaporte": "0"
+    },
+    {
+      "linha": "11978388723",
+      "pacote": "Claro Pós 10GB",
+      "mensalidade_total": "48,49",
+      "internet_mb": "7.308.804",
+      "minutos": "42s",
+      "passaporte": "-",
+      "valor_passaporte": "0"
     }
   ]
 }
 """
 
 _PROMPT_VERIFICAR_INTERNET = """Analise esta fatura Claro Empresas.
-Para CADA seção "DETALHAMENTO DE LIGAÇÕES E SERVIÇOS DO CELULAR":
-  1. Encontre a subseção "Internet (MB)"
-  2. Retorne o valor da linha "Subtotal" de Mbytes Utilizados
-  3. Se não houver Subtotal, some "Internet" + "Internet – meses anteriores"
-  4. Se não houver seção Internet nesta seção, retorne "0"
+Para CADA seção "DETALHAMENTO DE LIGAÇÕES E SERVIÇOS DO CELULAR (XX) XXXXX XXXX":
 
-Retorne SOMENTE JSON, sem markdown. Uma entrada por linha, na ordem da fatura:
+Encontre DENTRO DESTA SEÇÃO a subseção "Internet (MB)" com esta estrutura:
+  Serviço              Mbytes Utilizados
+  Internet                 1.455.161
+  Internet – meses ant.       60.552
+  Subtotal                 1.515.713   ← retorne este valor
+
+Regras:
+1. Use "Subtotal" quando existir
+2. Se não houver Subtotal: some "Internet" + "Internet – meses anteriores"
+3. Se só houver "Internet": use esse valor
+4. Se não houver seção Internet: retorne "0"
+
+⚠️ NUNCA use valores da tabela de datas diárias ("Detalhes da Internet móvel").
+⚠️ Cada número de linha tem seus próprios valores — não misture.
+
+Retorne SOMENTE JSON:
 [
   {"linha": "11932356185", "internet_mb": "2.037.312"},
-  {"linha": "11978388723", "internet_mb": "7.308.804"}
+  {"linha": "11978388723", "internet_mb": "7.308.804"},
+  {"linha": "11932356313", "internet_mb": "1.515.713"},
+  {"linha": "11945701012", "internet_mb": "12.722"},
+  {"linha": "11947961230", "internet_mb": "387.484"},
+  {"linha": "11945704141", "internet_mb": "0"},
+  {"linha": "11978110855", "internet_mb": "0"}
 ]
 
-Retorne o valor exatamente como aparece na fatura (com pontos de milhar).
-Se internet for zero ou ausente, retorne "0".
+Retorne o Subtotal exatamente como aparece na fatura. Se zero/ausente, retorne "0".
 """
 
 
@@ -839,9 +856,9 @@ def _parsear_json_ia(texto: str) -> dict | None:
 
 
 def _converter_paginas(pdf_bytes: bytes) -> list:
-    """Converte PDF em lista de imagens PIL."""
+    """Converte PDF em lista de imagens PIL. DPI 200 para melhor leitura de números."""
     try:
-        return _pdf2image_convert(pdf_bytes, dpi=150)
+        return _pdf2image_convert(pdf_bytes, dpi=200)
     except Exception:
         return []
 
@@ -1148,7 +1165,7 @@ def processar_pdf(file):
                 pass
 
         # Se todos os pacotes vieram "-", faz um request dedicado para pacotes
-        # Isso acontece quando a estrutura da fatura não lista GB em cada seção
+        # Isso acontece quando o Gemini não encontra GB nas seções de detalhamento
         todos_sem_pacote = all(
             not item.get("pacote") or item.get("pacote") == "-"
             for item in dados_ia
@@ -1163,16 +1180,23 @@ def processar_pdf(file):
                 if _api_key:
                     _genai.configure(api_key=_api_key)
                     _model = _genai.GenerativeModel("gemini-2.5-flash-lite")
-                    _prompt_pacote = """Nesta fatura Claro Empresas, para CADA seção
-"DETALHAMENTO DE LIGAÇÕES E SERVIÇOS DO CELULAR", encontre qual plano individual
-está associado a esta linha. Procure em:
-1. Linhas indentadas dentro de "Mensalidades e Pacotes Promocionais" (ex: "Claro Pós 40GB")
-2. Seção "1. PLANO CONTRATADO" da capa que lista os planos de cada número
-3. Seção "VALOR DE COBRANÇAS POR CELULAR" que pode listar o plano por número
+                    # Lista as linhas para ancoragem explícita
+                    _nums = [item.get("linha","") for item in dados_ia if item.get("linha")]
+                    _lista_linhas = "\n".join(f"- {n}" for n in _nums)
+                    _prompt_pacote = f"""Nesta fatura Claro Empresas, para CADA uma das linhas abaixo,
+encontre qual plano individual está listado na subseção "Mensalidades e Pacotes Promocionais"
+da seção "DETALHAMENTO DE LIGAÇÕES E SERVIÇOS DO CELULAR" daquela linha específica.
+
+Linhas a identificar:
+{_lista_linhas}
+
+O plano individual é a linha indentada com GB (ex: "Claro Pós 40GB", "Claro Pós 10GB").
+NÃO use "Oferta Conjunta Claro MIX".
+Cada linha tem seu próprio plano — não copie de uma para outra.
 
 Retorne SOMENTE JSON:
-[{"linha": "11932356185", "pacote": "Claro Pós 40GB"}, ...]
-Se não encontrar para uma linha, use "-".
+[{{"linha": "11932356185", "pacote": "Claro Pós 40GB"}}, ...]
+Se não encontrar para uma linha específica, use "-" para aquela linha.
 """
                     _imgs = _converter_paginas(pdf_bytes)
                     if _imgs:
@@ -1180,10 +1204,17 @@ Se não encontrar para uma linha, use "-".
                         _texto = re.sub(r"```json|```", "", _resp.text).strip()
                         _lista = _json.loads(_texto)
                         if isinstance(_lista, list):
-                            _mapa_pacote = {i["linha"]: i["pacote"] for i in _lista if "linha" in i and "pacote" in i}
+                            # Só aceita se o número de linha bater exatamente
+                            _linhas_validas = {item.get("linha","") for item in dados_ia}
+                            _mapa_pacote = {
+                                i["linha"]: i["pacote"]
+                                for i in _lista
+                                if "linha" in i and "pacote" in i
+                                and i["linha"] in _linhas_validas
+                            }
                             for item in dados_ia:
                                 num = item.get("linha", "")
-                                if num in _mapa_pacote and _mapa_pacote[num] != "-":
+                                if num in _mapa_pacote and _mapa_pacote[num] not in ("-", ""):
                                     item["pacote"] = _mapa_pacote[num]
             except Exception:
                 pass  # falha silenciosa
