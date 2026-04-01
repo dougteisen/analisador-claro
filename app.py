@@ -1123,10 +1123,70 @@ Retorne SOMENTE JSON:
 """
 
 
+_PROMPT_CAPA_COMPARTILHADA = """Analise SOMENTE a primeira página desta fatura Claro Empresas.
+
+Na seção "1. PLANO CONTRATADO", subseção "Compartilhado", extraia:
+
+1. O nome do plano: linha que contém "Claro Total Compartilhado" seguida de XGB (ex: "Claro Total Compartilhado 150GB"). Ignore códigos como [192].
+2. O valor do plano: número na mesma linha de "Oferta Conjunta Claro MIX" (ex: "310,28"). Formato: vírgula decimal, sem R$.
+
+Também extraia da capa:
+3. "cliente": razão social da empresa.
+4. "vencimento": data DD/MM/AAAA.
+
+Retorne SOMENTE JSON:
+{"cliente": "CONFRUTY ALIMENTOS EIRELI", "vencimento": "24/03/2026", "nome_plano_compartilhado": "Claro Total Compartilhado 150GB", "valor_plano_compartilhado": "310,28"}
+"""
+
+
+def _enriquecer_capa_anthropic(resultado: dict, img_capa, api_key: str) -> None:
+    """
+    Request extra focado só na capa (1 imagem) para recuperar nome/valor do plano
+    quando o request principal não os retornou corretamente.
+    Modifica resultado in-place.
+    """
+    import requests as _req, base64, json as _json
+    try:
+        buf = io.BytesIO()
+        img_capa.save(buf, format="JPEG", quality=85)
+        b64 = base64.b64encode(buf.getvalue()).decode()
+
+        content = [
+            {"type": "text", "text": _PROMPT_CAPA_COMPARTILHADA},
+            {"type": "image", "source": {"type": "base64", "media_type": "image/jpeg", "data": b64}}
+        ]
+        resp = _req.post(
+            "https://api.anthropic.com/v1/messages",
+            headers={"Content-Type": "application/json",
+                     "anthropic-version": "2023-06-01",
+                     "x-api-key": api_key},
+            json={"model": "claude-sonnet-4-20250514", "max_tokens": 300,
+                  "messages": [{"role": "user", "content": content}]},
+            timeout=60
+        )
+        if resp.status_code != 200:
+            return
+        texto = "".join(b["text"] for b in resp.json().get("content", []) if b.get("type") == "text")
+        texto = re.sub(r"```json|```", "", texto).strip()
+        dados = _json.loads(texto)
+
+        # Preenche apenas campos ausentes/inválidos
+        if not resultado.get("nome_plano_compartilhado"):
+            resultado["nome_plano_compartilhado"] = dados.get("nome_plano_compartilhado", "")
+        if not resultado.get("valor_plano_compartilhado") or resultado.get("valor_plano_compartilhado") == "0":
+            resultado["valor_plano_compartilhado"] = dados.get("valor_plano_compartilhado", "0")
+        if not resultado.get("cliente") or resultado.get("cliente") == "CLIENTE":
+            resultado["cliente"] = dados.get("cliente", "CLIENTE")
+        if not resultado.get("vencimento"):
+            resultado["vencimento"] = dados.get("vencimento", "")
+    except Exception:
+        pass
+
+
 def _analisar_compartilhado_com_anthropic(imgs: list) -> dict | None:
     """
     Usa Claude Sonnet para extrair dados de fatura compartilhada em PDF de imagem.
-    Mesmo mecanismo de _analisar_com_anthropic, com prompt especializado.
+    Se nome/valor do plano não vier no request principal, faz request extra só da capa.
     """
     import requests as _req, base64
     try:
@@ -1164,7 +1224,15 @@ def _analisar_compartilhado_com_anthropic(imgs: list) -> dict | None:
         if resp.status_code != 200:
             return None
         texto = "".join(b["text"] for b in resp.json().get("content", []) if b.get("type") == "text")
-        return _parsear_json_compartilhado(texto)
+        resultado = _parsear_json_compartilhado(texto)
+
+        # Fallback: se nome ou valor do plano vieram vazios, request extra só da capa
+        if resultado and (not resultado.get("nome_plano_compartilhado") or
+                          not resultado.get("valor_plano_compartilhado") or
+                          resultado.get("valor_plano_compartilhado") == "0"):
+            _enriquecer_capa_anthropic(resultado, imgs[0], api_key)
+
+        return resultado
     except Exception:
         return None
 
