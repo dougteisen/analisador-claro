@@ -658,14 +658,20 @@ Número do cabeçalho. 11 dígitos sem espaços/parênteses.
 
 ━━━ "pacote" ━━━
 DENTRO desta seção, em "Mensalidades e Pacotes Promocionais":
+
   Oferta Conjunta Claro MIX       52,48
     App incluso na oferta – ...     –
-    Claro Pós 40GB                  –   ← este é o pacote
+    Claro Pós 40GB                  –   ← este é o pacote desta linha
     Aplicativos Digitais            –
 
-A linha do pacote tem GB no nome e valor "–" (não tem preço próprio).
-NÃO use "Oferta Conjunta Claro MIX". NÃO use "App incluso". NÃO use "Aplicativos Digitais".
-Se não encontrar nesta seção, use "-". NÃO busque em outras seções.
+O pacote é a linha indentada que contém "GB" no nome.
+Exemplos válidos: "Claro Pós 10GB", "Claro Pós 20GB", "Claro Pós 40GB", "Claro Controle 5GB"
+NÃO use: "Oferta Conjunta Claro MIX", "App incluso", "Aplicativos Digitais", "Pacote Mobilidade"
+
+⚠️ CADA SEÇÃO TEM SEU PRÓPRIO PACOTE. Antes de registrar, confirme que o número
+da linha do cabeçalho desta seção bate com o pacote que você está lendo.
+NÃO copie o pacote de uma seção para outra.
+Se não encontrar linha com GB nesta seção específica, use "-".
 
 ━━━ "mensalidade_total" ━━━
 Linha "TOTAL" da subseção "Mensalidades e Pacotes Promocionais" desta seção.
@@ -790,52 +796,27 @@ def _fmt_mb_display(v: float) -> str:
     return f"{inteiro:,}".replace(",", ".") + f",{decimal:03d}"
 
 
-_PACOTES_CLARO = [
-    (40.00, 50.00, 10),
-    (50.01, 65.00, 20),
-    (65.01, 85.00, 30),
-    (85.01, 110.00, 50),
-    (110.01, 999.00, 100),
-]
-
 def _validar_pacote_ia(pacote: str, mensalidade_total: str) -> str:
     """
-    Corrige o pacote usando a mensalidade como âncora.
-
-    REGRA PRINCIPAL: se o Gemini retornou um nome COM GB (ex: "Claro Pós 40GB"),
-    confia nele e NÃO sobrescreve — a fatura tem esse valor explícito e a
-    inferência por preço é imprecisa (ex: 40GB e 20GB podem ter preços próximos).
-
-    CORREÇÃO: só age quando o nome NÃO tem GB, indicando bundle genérico
-    ("Claro Pós MIX", "Oferta Conjunta Claro MIX") em vez do plano individual.
+    Normaliza o pacote retornado pela IA.
+    Remove nomes de bundle genérico sem GB — esses indicam que o Gemini
+    retornou o nome do bundle ao invés do plano individual.
+    Preço NÃO é usado como referência — a Claro negocia individualmente.
     """
     if not pacote or pacote == '-':
         return pacote
 
-    # Se já tem GB explícito → confiar no Gemini, não sobrescrever
+    # Se tem GB no nome → é o plano individual correto, retorna como está
     if re.search(r'\d+\s*GB', pacote, re.IGNORECASE):
         return pacote
 
-    # Sem GB → bundle genérico → só corrige se for nome Claro Pós/bundle
-    nomes_genericos = ["mix", "oferta conjunta", "bundle"]
-    eh_generico = (
-        any(n in pacote.lower() for n in nomes_genericos)
-        or pacote.lower().startswith("claro pós")
-    )
-    if not eh_generico:
-        return pacote  # plano específico sem GB (ex: "Claro Life Ilimitado") → mantém
+    # Sem GB → nome de bundle genérico (Gemini leu errado)
+    # Retorna "-" para indicar que não encontrou o plano individual
+    nomes_bundle = ["mix", "oferta conjunta", "bundle", "oferta claro"]
+    if any(n in pacote.lower() for n in nomes_bundle):
+        return "-"
 
-    try:
-        mensalidade = float(mensalidade_total.replace('.', '').replace(',', '.'))
-    except (ValueError, AttributeError):
-        return pacote
-    if mensalidade <= 0:
-        return pacote
-
-    for mn, mx, gb_esperado in _PACOTES_CLARO:
-        if mn <= mensalidade <= mx:
-            return f"Claro Pós {gb_esperado}GB"
-
+    # Outros casos sem GB (ex: "Claro Life Ilimitado") → mantém como está
     return pacote
 
 
@@ -1169,18 +1150,8 @@ def processar_pdf(file):
             except Exception:
                 pass
 
-        # Se todos os pacotes vieram "-", tenta inferir pela mensalidade
-        # Não faz request extra — usa apenas o que já temos
-        todos_sem_pacote = all(
-            not item.get("pacote") or item.get("pacote") == "-"
-            for item in dados_ia
-        )
-        if todos_sem_pacote and dados_ia:
-            for item in dados_ia:
-                mens = item.get("mensalidade_total", "0")
-                pacote_inf = _validar_pacote_ia("-", mens)
-                if pacote_inf != "-":
-                    item["pacote"] = pacote_inf
+        # Se todos os pacotes vieram "-" ou bundle sem GB, não há o que corrigir
+        # sem risco de inventar dados. Mantém como está.
 
         dados = []
         for item in dados_ia:
