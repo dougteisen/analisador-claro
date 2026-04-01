@@ -627,11 +627,8 @@ def extrair_pacote_e_passaporte(blocos: dict) -> dict:
                 linha_limpa = linha_bloco.strip()
                 if "Claro Passaporte" not in linha_limpa:
                     continue
-                # Ignora Passaporte Americas (roaming/exterior)
-                if "Americas" in linha_limpa or "Mundo" in linha_limpa:
-                    continue
-                # Captura nome do passaporte nacional e valor no final da linha
-                m = re.search(r"(Claro Passaporte.*?GB).*?([\d]+,\d{2})$", linha_limpa)
+                # Captura nome do passaporte e valor no final da linha
+                m = re.search(r"(Claro Passaporte[^\n]+?)\s+([\d]+,\d{2})$", linha_limpa)
                 if m:
                     passaporte = m.group(1).strip()
                     valor_passaporte = m.group(2).strip()
