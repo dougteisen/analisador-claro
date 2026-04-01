@@ -509,13 +509,30 @@ def extrair_blocos_por_linha(texto: str) -> dict:
 
 def extrair_mensalidades(blocos: dict) -> dict:
     """
-    Captura o TOTAL de cada linha com múltiplos fallbacks para suportar
-    variações de formatação em PDFs digitais e PDFs de imagem (OCR).
+    Captura o valor da mensalidade de cada linha.
+    Estratégia prioritária: valor da "Oferta Conjunta Claro MIX" (ignora descontos e excedentes).
+    Fallbacks para PDFs com variações de formatação.
     """
     mapa = {}
     for linha, bloco in blocos.items():
         total_pdf = 0.0
         total_str = None
+
+        # Estratégia 0 (PRIORITÁRIA): valor da linha "Oferta Conjunta Claro MIX"
+        # Correto mesmo quando há descontos (Desconto Navegação Web, etc.) que distorcem o TOTAL
+        m_oferta = re.search(
+            r"Oferta Conjunta Claro MIX\s+([\d\.]+,\d{2})",
+            bloco
+        )
+        if m_oferta:
+            total_str = m_oferta.group(1)
+            try:
+                total_pdf = float(total_str.replace(".", "").replace(",", "."))
+                if total_pdf > 0:
+                    mapa[linha] = total_str
+                    continue
+            except (ValueError, TypeError):
+                pass
 
         # Estratégia 1: "TOTAL R$59,15" ou "TOTAL R$ 59,15" (com ou sem espaço)
         m = re.search(r"TOTAL\s*R\$\s*([\d\.,]+)", bloco)
