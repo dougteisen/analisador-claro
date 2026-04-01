@@ -1043,16 +1043,17 @@ Estrutura real:
   Subtotal                    13.513,476                           0,00  ← USE ESTE
 
 Regras em ordem de prioridade:
-1. Use o valor da linha "Subtotal" se existir — é sempre a soma correta
-2. Se não houver Subtotal: some "Internet" + "Internet – meses anteriores"
+1. Use o valor da linha "Subtotal" desta seção — é a soma correta
+2. Se não houver Subtotal: some apenas "Internet" + "Internet – meses anteriores" DESTA seção
 3. Se só houver "Internet": use esse valor
-4. Retorne "0" se não houver seção Internet
+4. Retorne "0" se não houver seção Internet nesta seção
 
-⚠️ ATENÇÃO: os valores de Mbytes têm VÍRGULA como separador decimal e PONTO como milhar.
-   Exemplo: "13.513,476" significa treze mil quinhentos e treze vírgula quatrocentos e setenta e seis MB.
-   Retorne EXATAMENTE como aparece na fatura: "13.513,476" — NÃO transforme em "13513476".
-⚠️ NUNCA use valores da tabela "Detalhes da Internet móvel" (datas diárias com valores pequenos).
-⚠️ Nunca some valores de seções diferentes.
+⚠️ ISOLAMENTO CRÍTICO: cada seção de detalhamento tem sua própria tabela Internet.
+   O Subtotal de uma seção NUNCA é válido para outra seção.
+   Não avance para a próxima seção ao buscar o Subtotal.
+⚠️ Os valores usam PONTO como milhar e VÍRGULA como decimal: "13.513,476" = 13513,476 MB.
+   Retorne EXATAMENTE como aparece: "13.513,476", "535.753", "13.390", "0".
+⚠️ NUNCA use a tabela "Detalhes da Internet móvel" (contém valores diários pequenos por data).
 
 ━━━ "minutos" ━━━
 Linha "TOTAL" do RODAPÉ desta seção (última linha da seção), coluna "Duração".
@@ -1186,9 +1187,12 @@ def _enriquecer_capa_anthropic(resultado: dict, img_capa, api_key: str) -> None:
 def _analisar_compartilhado_com_anthropic(imgs: list) -> dict | None:
     """
     Usa Claude Sonnet para extrair dados de fatura compartilhada em PDF de imagem.
-    Se nome/valor do plano não vier no request principal, faz request extra só da capa.
+    Estratégia em 2 requests:
+      1. Capa (só página 1): extrai nome/valor do plano + cliente/vencimento — sempre
+      2. Detalhamento (todas as páginas): extrai dados por linha
+    Isso garante que nome/valor do plano nunca se perdem em faturas longas.
     """
-    import requests as _req, base64
+    import requests as _req, base64, json as _json
     try:
         api_key = None
         try:
@@ -1203,34 +1207,70 @@ def _analisar_compartilhado_com_anthropic(imgs: list) -> dict | None:
             img.save(buf, format="JPEG", quality=85)
             return base64.b64encode(buf.getvalue()).decode()
 
+        headers = {
+            "Content-Type": "application/json",
+            "anthropic-version": "2023-06-01",
+            "x-api-key": api_key,
+        }
+
+        # ── Request 1: só a capa (página 1) ──────────────────────────────────
+        dados_capa = {"cliente": "CLIENTE", "vencimento": "",
+                      "nome_plano_compartilhado": "", "valor_plano_compartilhado": "0"}
+        try:
+            buf = io.BytesIO()
+            imgs[0].save(buf, format="JPEG", quality=85)
+            b64_capa = base64.b64encode(buf.getvalue()).decode()
+            resp_capa = _req.post(
+                "https://api.anthropic.com/v1/messages",
+                headers=headers,
+                json={"model": "claude-sonnet-4-20250514", "max_tokens": 400,
+                      "messages": [{"role": "user", "content": [
+                          {"type": "text", "text": _PROMPT_CAPA_COMPARTILHADA},
+                          {"type": "image", "source": {"type": "base64",
+                           "media_type": "image/jpeg", "data": b64_capa}}
+                      ]}]},
+                timeout=60
+            )
+            if resp_capa.status_code == 200:
+                txt = "".join(b["text"] for b in resp_capa.json().get("content", [])
+                              if b.get("type") == "text")
+                txt = re.sub(r"```json|```", "", txt).strip()
+                dados_capa.update(_json.loads(txt))
+        except Exception:
+            pass
+
+        # ── Request 2: todas as páginas para detalhamento por linha ──────────
         content = [{"type": "text", "text": _PROMPT_FATURA_COMPARTILHADA}]
         for img in imgs:
             content.append({
                 "type": "image",
-                "source": {"type": "base64", "media_type": "image/jpeg", "data": img_to_b64(img)}
+                "source": {"type": "base64", "media_type": "image/jpeg",
+                           "data": img_to_b64(img)}
             })
-
         resp = _req.post(
             "https://api.anthropic.com/v1/messages",
-            headers={
-                "Content-Type": "application/json",
-                "anthropic-version": "2023-06-01",
-                "x-api-key": api_key,
-            },
+            headers=headers,
             json={"model": "claude-sonnet-4-20250514", "max_tokens": 4000,
                   "messages": [{"role": "user", "content": content}]},
             timeout=180
         )
         if resp.status_code != 200:
             return None
-        texto = "".join(b["text"] for b in resp.json().get("content", []) if b.get("type") == "text")
+        texto = "".join(b["text"] for b in resp.json().get("content", [])
+                        if b.get("type") == "text")
         resultado = _parsear_json_compartilhado(texto)
+        if not resultado:
+            return None
 
-        # Fallback: se nome ou valor do plano vieram vazios, request extra só da capa
-        if resultado and (not resultado.get("nome_plano_compartilhado") or
-                          not resultado.get("valor_plano_compartilhado") or
-                          resultado.get("valor_plano_compartilhado") == "0"):
-            _enriquecer_capa_anthropic(resultado, imgs[0], api_key)
+        # ── Mescla: dados da capa sempre prevalecem para nome/valor/cliente/vencimento
+        if dados_capa.get("nome_plano_compartilhado"):
+            resultado["nome_plano_compartilhado"] = dados_capa["nome_plano_compartilhado"]
+        if dados_capa.get("valor_plano_compartilhado") and dados_capa["valor_plano_compartilhado"] != "0":
+            resultado["valor_plano_compartilhado"] = dados_capa["valor_plano_compartilhado"]
+        if dados_capa.get("cliente") and dados_capa["cliente"] != "CLIENTE":
+            resultado["cliente"] = dados_capa["cliente"]
+        if dados_capa.get("vencimento"):
+            resultado["vencimento"] = dados_capa["vencimento"]
 
         return resultado
     except Exception:
