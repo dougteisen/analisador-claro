@@ -169,21 +169,34 @@ hr {
 [data-testid="stFileUploaderDropzone"] {
     background: transparent !important;
     border: none !important;
+    display: flex !important;
+    align-items: center !important;
+    justify-content: space-between !important;
 }
-/* Esconde o texto duplicado dentro do botão (stMarkdownContainer mostra "upload" junto com o ícone) */
+/* Esconde o texto duplicado (stMarkdownContainer mostra "Upload" junto com o ícone) */
 [data-testid="stFileUploaderDropzone"] button [data-testid="stMarkdownContainer"] {
     display: none !important;
 }
-/* Estilo do botão de upload */
+/* Esconde ícone do material icons, mantém só o texto do ícone como label */
+[data-testid="stFileUploaderDropzone"] button [data-testid="stIconMaterial"] {
+    display: none !important;
+}
+/* Botão estilizado no padrão do app */
 [data-testid="stFileUploaderDropzone"] button[data-testid="stBaseButton-secondary"] {
-    background: rgba(16,185,129,0.12) !important;
-    color: #10b981 !important;
-    border: 1px solid rgba(16,185,129,0.35) !important;
-    border-radius: 8px !important;
+    background: linear-gradient(135deg, #059669 0%, #10b981 100%) !important;
+    color: #fff !important;
+    border: none !important;
+    border-radius: 10px !important;
     font-size: 0.85rem !important;
+    font-weight: 600 !important;
     font-family: 'DM Sans', sans-serif !important;
-    padding: 6px 18px !important;
-    float: right !important;
+    padding: 8px 20px !important;
+    box-shadow: 0 4px 12px rgba(16,185,129,0.3) !important;
+    white-space: nowrap !important;
+    flex-shrink: 0 !important;
+}
+[data-testid="stFileUploaderDropzone"] button[data-testid="stBaseButton-secondary"]::after {
+    content: "📂  Selecionar PDF" !important;
 }
 [data-testid="stFileUploaderDropzoneInstructions"] p,
 [data-testid="stFileUploaderDropzoneInstructions"] span {
