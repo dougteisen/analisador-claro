@@ -1612,10 +1612,14 @@ if uploaded_files:
         st.markdown('<p class="tt-section-title">📊 Resumo da Fatura</p>', unsafe_allow_html=True)
 
         col1, col2, col3, col4 = st.columns(4)
-        total_linhas = len(df_total)
-        em_uso       = (df_total["Em Uso"] == "Sim").sum()
+
+        # Exclui linha especial "PLANO COMPARTILHADO" dos cálculos de resumo
+        df_linhas = df_total[df_total["Linha"] != "PLANO COMPARTILHADO"]
+
+        total_linhas = len(df_linhas)
+        em_uso       = (df_linhas["Em Uso"] == "Sim").sum()
         inativas     = total_linhas - em_uso
-        total_gb     = df_total["Internet (MB)"].sum() / 1024
+        total_gb     = df_linhas["Internet (MB)"].sum() / 1024
         media_gb     = total_gb / total_linhas if total_linhas else 0
 
         col1.metric("Total de Linhas", total_linhas)
