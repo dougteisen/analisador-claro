@@ -631,7 +631,209 @@ def extrair_gb_pacote(pacote: str) -> int:
     m = re.search(r"(\d+)\s*GB", str(pacote))
     return int(m.group(1)) if m else 0
 
-# ===== ANÁLISE VIA IA — Gemini Vision (gratuito) ou Anthropic (pago) ==========
+# ===== PLANO COMPARTILHADO =================================================
+# Funções 100% separadas do fluxo individual.
+# O código existente para planos individuais NÃO é tocado.
+
+def _detectar_plano_compartilhado(texto: str) -> bool:
+    """Retorna True se a fatura for de plano compartilhado."""
+    return bool(re.search(r"Claro Total Compartilhado|Total Compartilhado", texto, re.IGNORECASE))
+
+def _extrair_plano_compartilhado_info(texto: str) -> dict:
+    """
+    Extrai nome e valor do plano compartilhado da capa.
+    Ex: "Claro Total Compartilhado 500GB" → {"nome": "Claro Total Compartilhado 500GB", "valor": 695.48}
+    """
+    # Busca padrão: "Oferta Conjunta Claro MIX  695,48" seguido de "Claro Total Compartilhado XGB"
+    m_valor = re.search(
+        r"Oferta Conjunta Claro MIX\s+([\d\.]+,\d{2})\s*\n\s*(Claro Total Compartilhado[^\n\[]+)",
+        texto
+    )
+    if m_valor:
+        valor_str = m_valor.group(1)
+        nome = m_valor.group(2).strip()
+        return {"nome": nome, "valor": to_float(valor_str)}
+
+    # Fallback: busca direta pelo nome e valor na seção plano contratado
+    m_nome = re.search(r"(Claro Total Compartilhado[^\n\[]+)", texto)
+    m_val2 = re.search(r"Oferta Conjunta Claro MIX\s+([\d\.]+,\d{2})", texto)
+    if m_nome and m_val2:
+        return {"nome": m_nome.group(1).strip(), "valor": to_float(m_val2.group(1))}
+
+    return {"nome": "Claro Total Compartilhado", "valor": 0.0}
+
+def _extrair_blocos_compartilhado(texto: str) -> dict:
+    """
+    Extrai blocos de detalhamento por linha para plano compartilhado.
+    Retorna dict: {numero: texto_do_bloco}
+    """
+    padrao = r"DETALHAMENTO DE LIGAÇÕES E SERVIÇOS DO CELULAR \((\d{2})\)\s*(\d{4,5}\s*\d{4})"
+    posicoes = [(m.start(), normalizar_numero(m.group(1) + m.group(2).replace(" ", "")))
+                for m in re.finditer(padrao, texto)]
+
+    blocos = {}
+    for idx, (pos, num) in enumerate(posicoes):
+        fim = posicoes[idx + 1][0] if idx + 1 < len(posicoes) else len(texto)
+        blocos[num] = texto[pos:fim]
+    return blocos
+
+def _extrair_internet_compartilhado(bloco: str) -> float:
+    """Extrai MB do Subtotal de internet do bloco de uma linha."""
+    # Subtotal
+    m = re.search(r"Subtotal\s+([\d\.]+,\d{3})", bloco)
+    if m:
+        return to_float(m.group(1))
+    # Só Internet + meses anteriores
+    vals = re.findall(r"Internet(?:\s*[-–]\s*meses\s+anteriores)?\s+([\d\.]+,\d{3})", bloco)
+    return sum(to_float(v) for v in vals)
+
+def _extrair_minutos_compartilhado(bloco: str) -> str:
+    """Extrai duração total de ligações do bloco."""
+    m = re.search(r"TOTAL\s+(\d+min(?:\d+s)?|\d+s)", bloco)
+    if m:
+        return m.group(1)
+    return "0"
+
+def _extrair_passaporte_compartilhado(bloco: str) -> tuple:
+    """
+    Extrai passaporte e valor do bloco de uma linha.
+    Retorna (nome_passaporte, valor_float)
+    """
+    # Busca dentro da seção de Mensalidades apenas (antes de "Ligações" ou "Serviços")
+    secao_mens = re.split(r"Ligações|Serviços \(Torpedos|TOTAL\s+R\$", bloco)[0]
+    m = re.search(
+        r"(Claro Passaporte[^\n]{3,50}?)\s+([\d]{1,3},\d{2})\s*$",
+        secao_mens, re.MULTILINE
+    )
+    if m:
+        nome = m.group(1).strip()
+        # Garante que não capturou lixo da NF (nome deve ter menos de 50 chars e sem dígitos demais)
+        if len(nome) < 60 and not re.search(r"\d{4}", nome):
+            return nome, to_float(m.group(2))
+    return "-", 0.0
+
+def _extrair_linhas_compartilhado_capa(texto: str) -> list:
+    """
+    Extrai todos os números de telefone das tabelas de cobranças por celular na capa.
+    Ex: "(11) 94463 9555  (11) 96326 8240 ..."
+    """
+    numeros = set()
+    for m in re.finditer(r"\((\d{2})\)\s*(\d{4,5}\s*\d{4})", texto):
+        num = normalizar_numero(m.group(1) + m.group(2).replace(" ", ""))
+        numeros.add(num)
+    return sorted(numeros)
+
+def processar_pdf_compartilhado(texto: str, cliente: str, vencimento: str) -> tuple:
+    """
+    Processa fatura de plano compartilhado a partir do texto extraído.
+    Retorna (DataFrame, cliente, vencimento) no mesmo formato que processar_pdf.
+    """
+    plano = _extrair_plano_compartilhado_info(texto)
+    nome_plano = plano["nome"]
+    valor_plano = plano["valor"]
+
+    blocos = _extrair_blocos_compartilhado(texto)
+
+    # Todos os números da fatura (via detalhamento)
+    todos_numeros = list(blocos.keys())
+    if not todos_numeros:
+        # Fallback: extrai da capa
+        todos_numeros = _extrair_linhas_compartilhado_capa(texto)
+
+    dados = []
+    for num in todos_numeros:
+        bloco = blocos.get(num, "")
+        internet_mb  = _extrair_internet_compartilhado(bloco)
+        minutos      = _extrair_minutos_compartilhado(bloco)
+        pass_nome, pass_val = _extrair_passaporte_compartilhado(bloco)
+
+        # Mensalidade individual (assinatura)
+        mensalidade_ind = 0.0
+        m_mens = re.search(r"Oferta Claro Total Mix Plugin Smartphone\s+([\d]+,\d{2})", bloco)
+        if m_mens:
+            mensalidade_ind = to_float(m_mens.group(1))
+
+        total_linha = mensalidade_ind + pass_val
+
+        dados.append({
+            "Linha":                  num,
+            "Internet (MB)":          internet_mb,
+            "Internet (MB) fmt":      _fmt_mb_display(internet_mb),
+            "Pacote de dados":        nome_plano,
+            "Mensalidade":            f"R$ {mensalidade_ind:.2f}".replace(".", ","),
+            "Passaporte":             pass_nome,
+            "Mensalidade Passaporte": f"R$ {pass_val:.2f}".replace(".", ",") if pass_val else "-",
+            "Total por linha":        f"R$ {total_linha:.2f}".replace(".", ","),
+            "Minutos":                minutos,
+        })
+
+    df = pd.DataFrame(dados)
+
+    # Classificação de perfil (baseada no consumo individual vs franquia total)
+    franquia_total_mb = extrair_gb_pacote(nome_plano) * 1024
+    total_consumido   = df["Internet (MB)"].sum() if not df.empty else 0
+
+    def classificar_compartilhado(mb):
+        if mb == 0:
+            return "⚪ Baixo"
+        # Percentual do consumo individual em relação à média esperada
+        n = max(len(dados), 1)
+        media_esperada = franquia_total_mb / n if franquia_total_mb > 0 else 0
+        if media_esperada == 0:
+            # Fallback: classifica por GB absoluto
+            gb = mb / 1024
+            if gb < 1:   return "⚪ Baixo"
+            if gb < 5:   return "🟡 Médio"
+            return "🔴 Alto"
+        ratio = mb / media_esperada
+        if ratio < 0.3:  return "⚪ Baixo"
+        if ratio < 0.8:  return "🟡 Médio"
+        return "🔴 Alto"
+
+    df["Perfil"] = df["Internet (MB)"].apply(classificar_compartilhado)
+
+    def em_uso_compartilhado(row):
+        minutos_str = str(row["Minutos"]).strip().lower()
+        sem_minutos = re.fullmatch(r"0[^\d]*|", minutos_str) is not None
+        if row["Internet (MB)"] == 0 and sem_minutos:
+            return "Não"
+        return "Sim"
+
+    df["Em Uso"] = df.apply(em_uso_compartilhado, axis=1)
+
+    def estrategia_compartilhado(row):
+        if row["Em Uso"] == "Não":
+            return "⚪ Manter"
+        if "Baixo" in row["Perfil"]:
+            return "🟡 Sustentar plano"
+        if "Médio" in row["Perfil"]:
+            return "🟢 Bem dimensionado"
+        if "Alto" in row["Perfil"]:
+            return "🟢 Bem dimensionado"
+        return ""
+
+    df["Estratégia Comercial"] = df.apply(estrategia_compartilhado, axis=1)
+
+    # Linha extra do plano compartilhado (somada no Total por linha)
+    linha_plano = {
+        "Linha":                  "PLANO COMPARTILHADO",
+        "Internet (MB)":          0.0,
+        "Internet (MB) fmt":      "-",
+        "Pacote de dados":        nome_plano,
+        "Mensalidade":            f"R$ {valor_plano:.2f}".replace(".", ","),
+        "Passaporte":             "-",
+        "Mensalidade Passaporte": "-",
+        "Total por linha":        f"R$ {valor_plano:.2f}".replace(".", ","),
+        "Minutos":                "-",
+        "Perfil":                 "-",
+        "Em Uso":                 "-",
+        "Estratégia Comercial":   "-",
+    }
+    df = pd.concat([df, pd.DataFrame([linha_plano])], ignore_index=True)
+
+    return df, cliente, vencimento
+
+
 
 _PROMPT_FATURA = """Você é um extrator especializado em faturas da Claro Empresas (Brasil).
 
@@ -1126,6 +1328,12 @@ def processar_pdf(file):
 
         cliente    = extrair_cliente(texto)
         vencimento = extrair_vencimento(texto)
+
+        # ── Detecção: plano compartilhado ou individual? ──
+        if _detectar_plano_compartilhado(texto):
+            return processar_pdf_compartilhado(texto, cliente, vencimento)
+
+        # ── Fluxo individual (original, intocado) ──
         linhas     = extrair_linhas(texto)
         blocos     = extrair_blocos_por_linha(texto)
         mensalidades = extrair_mensalidades(blocos)
@@ -1288,6 +1496,9 @@ def gerar_excel(df: pd.DataFrame) -> io.BytesIO:
         cell.alignment = Alignment(horizontal="center", vertical="center")
         cell.border = borda
 
+    azul_plano  = PatternFill(start_color="BDD7EE", fill_type="solid")
+    fonte_plano = Font(bold=True, color="1F4E79")
+
     for i, row in enumerate(ws.iter_rows(min_row=2), start=2):
         for j, cell in enumerate(row):
             coluna = headers[j]
@@ -1296,6 +1507,14 @@ def gerar_excel(df: pd.DataFrame) -> io.BytesIO:
             else:
                 cell.alignment = Alignment(horizontal="center", vertical="center")
             cell.border = borda
+
+        # Linha do plano compartilhado — destaque azul
+        linha_val = str(row[col_idx["Linha"]].value) if "Linha" in col_idx else ""
+        if linha_val == "PLANO COMPARTILHADO":
+            for cell in row:
+                cell.fill = azul_plano
+                cell.font = fonte_plano
+            continue  # não aplica zebra nem coloração de perfil
 
         if i % 2 == 0:
             for cell in row:
