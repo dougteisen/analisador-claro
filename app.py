@@ -476,7 +476,16 @@ def extrair_blocos_por_linha(texto: str) -> dict:
     """
     Divide o texto em blocos por linha telefônica.
     Tolerante a variações de acentuação do OCR (LIGACOES vs LIGAÇÕES, etc).
+    Remove marcadores de página (Pág. X/Y e continuações) antes de dividir,
+    evitando que quebras de página cortem blocos no meio.
     """
+    # Remove marcadores de página e cabeçalhos de continuação
+    texto = re.sub(r"Pág\.\s*\d+/\s*\d+", "", texto)
+    texto = re.sub(r"[^\n]*\(continuação\)[^\n]*\n?", "", texto, flags=re.IGNORECASE)
+    texto = re.sub(r"Serviços \(Torpedos.*?\)\s*\(continuação\)[^\n]*\n?", "", texto, flags=re.IGNORECASE)
+    texto = re.sub(r"Internet \(MB\)\s*\(continuação\)[^\n]*\n?", "", texto, flags=re.IGNORECASE)
+    texto = re.sub(r"Ligações.*?\(continuação\)[^\n]*\n?", "", texto, flags=re.IGNORECASE)
+
     # Estratégia 1: split tolerante a acentos (cobre OCR e PDF digital)
     blocos = _PADRAO_DIVISOR_BLOCO.split(texto)
 
@@ -519,17 +528,31 @@ def extrair_mensalidades(blocos: dict) -> dict:
         total_str = None
 
         # Estratégia 0 (PRIORITÁRIA): valor da linha "Oferta Conjunta Claro MIX"
-        # Correto mesmo quando há descontos (Desconto Navegação Web, etc.) que distorcem o TOTAL
+        # + passaporte NACIONAL (se houver), para manter consistência com o cálculo
+        # valor_plano = total - valor_pass feito pelo chamador.
+        # Ignora Passaporte Americas/roaming (uso no exterior não é contabilizado).
+        # Correto mesmo quando há descontos (Desconto Navegação Web, etc.) que distorcem o TOTAL.
         m_oferta = re.search(
             r"Oferta Conjunta Claro MIX\s+([\d\.]+,\d{2})",
             bloco
         )
         if m_oferta:
-            total_str = m_oferta.group(1)
             try:
-                total_pdf = float(total_str.replace(".", "").replace(",", "."))
-                if total_pdf > 0:
-                    mapa[linha] = total_str
+                val_mix = float(m_oferta.group(1).replace(".", "").replace(",", "."))
+                if val_mix > 0:
+                    # Soma apenas passaporte NACIONAL (Claro Passaporte XGB, sem "Americas")
+                    val_pass = 0.0
+                    m_pass = re.search(
+                        r"Claro Passaporte(?!\s+Americas)[^\n]+\s+([\d]+,\d{2})\s*$",
+                        bloco, re.MULTILINE
+                    )
+                    if m_pass:
+                        try:
+                            val_pass = float(m_pass.group(1).replace(".", "").replace(",", "."))
+                        except (ValueError, TypeError):
+                            pass
+                    total_final = val_mix + val_pass
+                    mapa[linha] = f"{total_final:.2f}".replace(".", ",")
                     continue
             except (ValueError, TypeError):
                 pass
@@ -604,7 +627,10 @@ def extrair_pacote_e_passaporte(blocos: dict) -> dict:
                 linha_limpa = linha_bloco.strip()
                 if "Claro Passaporte" not in linha_limpa:
                     continue
-                # Captura nome do passaporte e valor no final da linha
+                # Ignora Passaporte Americas (roaming/exterior)
+                if "Americas" in linha_limpa or "Mundo" in linha_limpa:
+                    continue
+                # Captura nome do passaporte nacional e valor no final da linha
                 m = re.search(r"(Claro Passaporte.*?GB).*?([\d]+,\d{2})$", linha_limpa)
                 if m:
                     passaporte = m.group(1).strip()
@@ -623,28 +649,32 @@ def extrair_detalhamento(blocos: dict) -> dict:
     for linha, bloco in blocos.items():
         internet = "0"
 
+        # Remove seção de roaming internacional antes de buscar internet local
+        # "Ligações e Serviços no exterior" contém "Internet (cobrança diária ou por MB)"
+        # que não deve ser confundido com internet local
+        bloco_local = re.split(r"Ligações e Serviços no exterior", bloco, flags=re.IGNORECASE)[0]
+
         # Estratégia 1: âncora em "Serviços (Torpedos" + linha "Internet X"
         # Funciona em PDFs digitais onde a seção está bem estruturada
         m = re.search(
             r"Servi[çc]os\s*\(Torpedos.*?^Internet\s+([\d\.]+[,\.][\d]+)\s+0[,\.]00",
-            bloco, re.DOTALL | re.MULTILINE | re.IGNORECASE
+            bloco_local, re.DOTALL | re.MULTILINE | re.IGNORECASE
         )
         if m:
             internet = m.group(1)
         else:
             # Estratégia 2: linha "Internet X,XXX 0,00" sem exigir âncora
-            # Mais tolerante a variações de OCR
             m = re.search(
                 r"^Internet\s+([\d\.]+[,\.][\d]+)\s+0[,\.]00",
-                bloco, re.MULTILINE | re.IGNORECASE
+                bloco_local, re.MULTILINE | re.IGNORECASE
             )
             if m:
                 internet = m.group(1)
             else:
-                # Estratégia 3: Subtotal após seção Internet (ignora Subtotal 0,00 do roaming)
+                # Estratégia 3: Subtotal após seção Internet
                 m = re.search(
                     r"Internet\s+[\d\.,]+.*?Subtotal\s+([\d\.]+[,\.][\d]+)\s+0[,\.]00",
-                    bloco, re.DOTALL | re.IGNORECASE
+                    bloco_local, re.DOTALL | re.IGNORECASE
                 )
                 if m:
                     try:
