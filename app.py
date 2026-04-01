@@ -527,31 +527,29 @@ def extrair_mensalidades(blocos: dict) -> dict:
         total_pdf = 0.0
         total_str = None
 
-        # Estratégia 0 (PRIORITÁRIA): valor da linha "Oferta Conjunta Claro MIX"
-        # + passaporte NACIONAL (se houver), para manter consistência com o cálculo
-        # valor_plano = total - valor_pass feito pelo chamador.
-        # Ignora Passaporte Americas/roaming (uso no exterior não é contabilizado).
-        # Correto mesmo quando há descontos (Desconto Navegação Web, etc.) que distorcem o TOTAL.
-        m_oferta = re.search(
-            r"Oferta Conjunta Claro MIX\s+([\d\.]+,\d{2})",
-            bloco
-        )
+        # Estratégia 0 (PRIORITÁRIA): Oferta Conjunta Claro MIX + todos os passaportes
+        # Ignora TOTAL (distorcido por descontos ou cortado por quebra de página)
+        m_oferta = re.search(r"Oferta Conjunta Claro MIX\s+([\d\.]+,\d{2})", bloco)
         if m_oferta:
             try:
                 val_mix = float(m_oferta.group(1).replace(".", "").replace(",", "."))
                 if val_mix > 0:
-                    # Soma apenas passaporte NACIONAL (Claro Passaporte XGB, sem "Americas")
-                    val_pass = 0.0
-                    m_pass = re.search(
-                        r"Claro Passaporte(?!\s+Americas)[^\n]+\s+([\d]+,\d{2})\s*$",
-                        bloco, re.MULTILINE
+                    # Soma todos os passaportes com valor na seção de mensalidades
+                    val_pass_total = 0.0
+                    secao_mens = re.search(
+                        r"Mensalidades e Pacotes Promocionais(.*?)(?:^TOTAL\s+R\$|Interurbanas|Ligações Locais|Ligações e Serviços|Serviços \(Torpedos)",
+                        bloco, re.DOTALL | re.IGNORECASE | re.MULTILINE
                     )
-                    if m_pass:
-                        try:
-                            val_pass = float(m_pass.group(1).replace(".", "").replace(",", "."))
-                        except (ValueError, TypeError):
-                            pass
-                    total_final = val_mix + val_pass
+                    if secao_mens:
+                        for lb in secao_mens.group(1).split("\n"):
+                            if "Claro Passaporte" in lb:
+                                mp = re.search(r"([\d]+,\d{2})\s*$", lb.strip())
+                                if mp:
+                                    try:
+                                        val_pass_total += float(mp.group(1).replace(".", "").replace(",", "."))
+                                    except (ValueError, TypeError):
+                                        pass
+                    total_final = val_mix + val_pass_total
                     mapa[linha] = f"{total_final:.2f}".replace(".", ",")
                     continue
             except (ValueError, TypeError):
