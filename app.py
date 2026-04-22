@@ -1681,7 +1681,7 @@ if uploaded_files:
         st.markdown('<div class="tt-divider"></div>', unsafe_allow_html=True)
         st.markdown('<p class="tt-section-title">📊 Resumo da Fatura</p>', unsafe_allow_html=True)
 
-        col1, col2, col3, col4 = st.columns(4)
+        col1, col2, col3, col4, col5 = st.columns(5)
 
         # Exclui linha especial "PLANO COMPARTILHADO" dos cálculos de resumo
         df_linhas = df_total[df_total["Linha"] != "PLANO COMPARTILHADO"]
@@ -1692,11 +1692,20 @@ if uploaded_files:
         total_gb     = df_linhas["Internet (MB)"].sum() / 1024
         media_gb     = total_gb / total_linhas if total_linhas else 0
 
+        # Soma total da fatura (todas as linhas incluindo PLANO COMPARTILHADO)
+        def _parse_rs(val):
+            try:
+                return float(str(val).replace("R$", "").replace(".", "").replace(",", ".").strip())
+            except (ValueError, TypeError):
+                return 0.0
+        total_fatura = df_total["Total por linha"].apply(_parse_rs).sum()
+
         col1.metric("Total de Linhas", total_linhas)
         col2.metric("Linhas Ativas", em_uso, delta=f"{inativas} inativas" if inativas else None,
                     delta_color="inverse")
         col3.metric("Consumo Total", f"{round(total_gb, 1)} GB")
         col4.metric("Média por Linha", f"{round(media_gb, 1)} GB")
+        col5.metric("Total da Fatura", f"R$ {total_fatura:,.2f}".replace(",", "X").replace(".", ",").replace("X", "."))
 
         st.markdown('<div class="tt-divider"></div>', unsafe_allow_html=True)
         st.markdown('<p class="tt-section-title">📋 Detalhamento por Linha</p>', unsafe_allow_html=True)
