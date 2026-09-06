@@ -856,8 +856,8 @@ def processar_pdf_compartilhado(texto: str, cliente: str, vencimento: str) -> tu
             if gb < 5:   return "🟡 Médio"
             return "🔴 Alto"
         ratio = mb / media_esperada
-        if ratio < 0.3:  return "⚪ Baixo"
-        if ratio < 0.8:  return "🟡 Médio"
+        if ratio < 0.40: return "⚪ Baixo"
+        if ratio < 0.55: return "🟡 Médio"
         return "🔴 Alto"
 
     df["Perfil"] = df["Internet (MB)"].apply(classificar_compartilhado)
@@ -1497,15 +1497,23 @@ def processar_pdf(file):
     # Coluna formatada para exibição: '14.423,700'
     df["Internet (MB) fmt"] = df["Internet (MB)"].apply(_fmt_mb_display)
 
-    def classificar(x):
-        if x > 10000:
-            return "🔴 Alto"
-        elif x > 3000:
-            return "🟡 Médio"
-        else:
+    def classificar(row):
+        mb = row["Internet (MB)"]
+        if mb == 0:
             return "⚪ Baixo"
+        gb_pacote = extrair_gb_pacote(row.get("Pacote de dados", ""))
+        if gb_pacote > 0:
+            ratio = mb / (gb_pacote * 1024)
+            if ratio < 0.40: return "⚪ Baixo"
+            if ratio < 0.55: return "🟡 Médio"
+            return "🔴 Alto"
+        # Fallback sem pacote reconhecido: classifica por GB absoluto
+        gb = mb / 1024
+        if gb < 1:  return "⚪ Baixo"
+        if gb < 5:  return "🟡 Médio"
+        return "🔴 Alto"
 
-    df["Perfil"] = df["Internet (MB)"].apply(classificar)
+    df["Perfil"] = df.apply(classificar, axis=1)
 
     def em_uso(row):
         minutos_str = str(row["Minutos"]).strip().lower()
